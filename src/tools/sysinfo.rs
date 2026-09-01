@@ -43,6 +43,344 @@ pub struct SystemOverview {
     pub boot_time_secs: u64,
     pub disks: Vec<DiskInfo>,
     pub networks: Vec<NetworkInterfaceInfo>,
+    pub local_ips: Vec<String>,
+    pub default_gateway: String,
+    pub dns_servers: Vec<String>,
+}
+
+/// Returns all non-loopback local IPv4 / IPv6 addresses, deduplicated.
+pub fn get_local_ips() -> Vec<String> {
+    let mut ips = Vec::new();
+    if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
+        for (_name, ip) in interfaces {
+            if !ip.is_loopback() {
+                let ip_str = ip.to_string();
+                if !ips.contains(&ip_str) {
+                    ips.push(ip_str);
+                }
+            }
+        }
+    }
+    if ips.is_empty() {
+        if let Ok(ip) = local_ip_address::local_ip() {
+            if !ip.is_loopback() {
+                let ip_str = ip.to_string();
+                if !ips.contains(&ip_str) {
+                    ips.push(ip_str);
+                }
+            }
+        }
+    }
+    ips
+}
+
+/// Discovers the system default gateway address, returning "unknown" on failure.
+#[cfg(target_os = "macos")]
+pub fn get_default_gateway() -> String {
+    // 1. Try route -n get default
+    if let Ok(out) = std::process::Command::new("route")
+        .args(["-n", "get", "default"])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("gateway:") {
+                    let gw = trimmed.trim_start_matches("gateway:").trim().to_string();
+                    if !gw.is_empty() {
+                        return gw;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Try netstat -rn -f inet
+    if let Ok(out) = std::process::Command::new("netstat")
+        .args(["-rn", "-f", "inet"])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 && (parts[0] == "default" || parts[0] == "0.0.0.0") {
+                    let gw = parts[1];
+                    if !gw.starts_with("link#") && !gw.is_empty() {
+                        return gw.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    "unknown".to_string()
+}
+
+#[cfg(target_os = "linux")]
+pub fn get_default_gateway() -> String {
+    // 1. Try ip route show default
+    if let Ok(out) = std::process::Command::new("ip")
+        .args(["route", "show", "default"])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(via_idx) = parts.iter().position(|&p| p == "via") {
+                    if let Some(gw) = parts.get(via_idx + 1) {
+                        return gw.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Try /proc/net/route
+    if let Ok(content) = std::fs::read_to_string("/proc/net/route") {
+        for line in content.lines().skip(1) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 && parts[1] == "00000000" {
+                if let Ok(hex_val) = u32::from_str_radix(parts[2], 16) {
+                    let ip = std::net::Ipv4Addr::from(hex_val.to_be());
+                    if !ip.is_unspecified() {
+                        return ip.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Fallback: route -n or netstat -rn
+    if let Ok(out) = std::process::Command::new("route")
+        .args(["-n"])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 && (parts[0] == "0.0.0.0" || parts[0] == "default") {
+                    let gw = parts[1];
+                    if gw != "0.0.0.0" && !gw.is_empty() {
+                        return gw.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    "unknown".to_string()
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_default_gateway() -> String {
+    // 1. Try PowerShell Get-NetRoute
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -First 1).NextHop",
+        ])
+        .output();
+
+    if let Ok(out) = output {
+        if out.status.success() {
+            let gw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !gw.is_empty() && gw != "0.0.0.0" {
+                return gw;
+            }
+        }
+    }
+
+    // 2. Fallback: route print 0.0.0.0
+    if let Ok(out) = std::process::Command::new("cmd")
+        .args(["/C", "route print 0.0.0.0"])
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 && parts[0] == "0.0.0.0" && parts[1] == "0.0.0.0" {
+                    let gw = parts[2];
+                    if gw != "0.0.0.0" && !gw.is_empty() {
+                        return gw.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    "unknown".to_string()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+pub fn get_default_gateway() -> String {
+    "unknown".to_string()
+}
+
+/// Discovers system DNS servers, returning an empty list if none found.
+#[cfg(target_os = "macos")]
+pub fn get_dns_servers() -> Vec<String> {
+    let mut servers = Vec::new();
+
+    // 1. Try scutil --dns
+    if let Ok(out) = std::process::Command::new("scutil")
+        .arg("--dns")
+        .output()
+    {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("nameserver[") {
+                    if let Some((_, val)) = trimmed.split_once(':') {
+                        let ip = val.trim();
+                        if !ip.is_empty() && !servers.contains(&ip.to_string()) {
+                            servers.push(ip.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fallback: /etc/resolv.conf
+    if servers.is_empty() {
+        if let Ok(content) = std::fs::read_to_string("/etc/resolv.conf") {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("nameserver") {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        let ip = parts[1].to_string();
+                        if !servers.contains(&ip) {
+                            servers.push(ip);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    servers
+}
+
+#[cfg(target_os = "linux")]
+pub fn get_dns_servers() -> Vec<String> {
+    let mut servers = Vec::new();
+
+    // 1. Read /etc/resolv.conf
+    if let Ok(content) = std::fs::read_to_string("/etc/resolv.conf") {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("nameserver") {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let ip = parts[1].to_string();
+                    if !servers.contains(&ip) {
+                        servers.push(ip);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fallback: resolvectl dns
+    if servers.is_empty() {
+        if let Ok(out) = std::process::Command::new("resolvectl")
+            .arg("dns")
+            .output()
+        {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                for line in text.lines() {
+                    if let Some((_, val)) = line.split_once(':') {
+                        for ip in val.split_whitespace() {
+                            let ip_str = ip.to_string();
+                            if !servers.contains(&ip_str) {
+                                servers.push(ip_str);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    servers
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_dns_servers() -> Vec<String> {
+    let mut servers = Vec::new();
+
+    // 1. Try PowerShell Get-DnsClientServerAddress
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(Get-DnsClientServerAddress -AddressFamily IPv4).ServerAddresses",
+        ])
+        .output();
+
+    if let Ok(out) = output {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() && !servers.contains(&trimmed.to_string()) {
+                    servers.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    // 2. Fallback: ipconfig /all
+    if servers.is_empty() {
+        if let Ok(out) = std::process::Command::new("cmd")
+            .args(["/C", "ipconfig /all"])
+            .output()
+        {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let mut in_dns_section = false;
+                for line in text.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("DNS Servers") || trimmed.starts_with("DNS 服务器") {
+                        if let Some((_, val)) = trimmed.split_once(':') {
+                            let ip = val.trim();
+                            if !ip.is_empty() && !servers.contains(&ip.to_string()) {
+                                servers.push(ip.to_string());
+                            }
+                        }
+                        in_dns_section = true;
+                    } else if in_dns_section {
+                        if trimmed.is_empty() || trimmed.contains(':') {
+                            in_dns_section = false;
+                        } else {
+                            let ip = trimmed.trim();
+                            if !ip.is_empty() && !servers.contains(&ip.to_string()) {
+                                servers.push(ip.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    servers
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+pub fn get_dns_servers() -> Vec<String> {
+    Vec::new()
 }
 
 /// Gathers a snapshot of system hardware, OS version, memory, disks, and network metrics.
@@ -100,6 +438,10 @@ pub fn get_system_overview() -> SystemOverview {
         })
         .collect();
 
+    let local_ips = get_local_ips();
+    let default_gateway = get_default_gateway();
+    let dns_servers = get_dns_servers();
+
     SystemOverview {
         os_name,
         os_version,
@@ -116,5 +458,9 @@ pub fn get_system_overview() -> SystemOverview {
         boot_time_secs: System::boot_time(),
         disks,
         networks,
+        local_ips,
+        default_gateway,
+        dns_servers,
     }
 }
+

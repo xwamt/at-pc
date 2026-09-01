@@ -13,6 +13,46 @@ fn test_get_system_overview() {
 }
 
 #[test]
+fn test_get_system_overview_includes_network_details() {
+    let overview = sysinfo::get_system_overview();
+    assert!(!overview.local_ips.is_empty(), "local_ips should not be empty");
+    assert!(!overview.default_gateway.is_empty(), "default_gateway should not be empty");
+    assert!(!overview.dns_servers.is_empty(), "dns_servers should not be empty");
+}
+
+#[test]
+fn test_network_helper_functions_direct() {
+    let ips = sysinfo::get_local_ips();
+    assert!(!ips.is_empty(), "get_local_ips() should return at least one IP on active host");
+    for ip in &ips {
+        assert!(!ip.is_empty());
+        assert!(!ip.starts_with("127."), "Loopback IPv4 should be excluded: {}", ip);
+        assert_ne!(ip, "::1", "Loopback IPv6 should be excluded");
+    }
+
+    let gw = sysinfo::get_default_gateway();
+    assert!(!gw.is_empty(), "get_default_gateway() should return a non-empty string or 'unknown'");
+
+    let dns = sysinfo::get_dns_servers();
+    // DNS may be empty in some mock/isolated envs, but should be a valid Vec
+    for server in &dns {
+        assert!(!server.is_empty(), "DNS server entries should not be empty");
+    }
+}
+
+#[test]
+fn test_dispatch_get_system_overview() {
+    let res = at_pc::tools::dispatch_mcp_tool("get_system_overview", serde_json::json!({})).unwrap();
+    assert!(res.get("local_ips").is_some());
+    assert!(res.get("default_gateway").is_some());
+    assert!(res.get("dns_servers").is_some());
+    assert!(res.get("disks").is_some());
+    assert!(res.get("networks").is_some());
+}
+
+
+
+#[test]
 fn test_list_processes_default_and_limit() {
     let procs = process::list_processes(None, Some("memory"), 10);
     assert!(!procs.is_empty(), "Process list should not be empty");

@@ -17,7 +17,7 @@ pub fn get_mcp_tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "get_system_overview",
-            "description": "Returns complete hardware and operating system status (OS version, CPU model/load, RAM usage, storage volumes, network interfaces, local IPs, and system uptime).",
+            "description": "Returns complete hardware and operating system status (OS version, CPU model/load, RAM usage, storage volumes, network interfaces, local IPs, default gateway, DNS servers, and system uptime).",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
