@@ -30,7 +30,7 @@ impl GuiState {
     pub fn new(lan_ip: String, server_state: Arc<AppState>) -> Self {
         let audit_rx = server_state.audit_sender.subscribe();
         let port = server_state.port;
-        let pin = server_state.pin.clone();
+        let pin = server_state.get_pin();
 
         let initial_entry = AuditLogEntry::new(
             "server_startup",
@@ -90,7 +90,7 @@ impl GuiState {
                 "at-pc": {
                     "url": url,
                     "headers": {
-                        "Authorization": format!("Bearer {}", self.pin)
+                        "Authorization": format!("Bearer {}", self.server_state.get_pin())
                     }
                 }
             }
@@ -101,16 +101,8 @@ impl GuiState {
     /// Triggers emergency stop and disconnects all sessions.
     pub fn trigger_emergency_stop(&mut self) {
         self.is_stopped = true;
-        self.server_state.trigger_shutdown();
-        let stop_entry = AuditLogEntry::new(
-            "emergency_stop",
-            serde_json::json!({}),
-            "STOPPED",
-            None,
-            None,
-            Some("用户触发紧急断开，服务已停止。".to_string()),
-        );
-        self.audit_logs.push(stop_entry);
+        self.server_state.trigger_emergency_stop();
+        self.poll_audit_logs();
     }
 }
 

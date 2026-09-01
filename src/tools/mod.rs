@@ -3,9 +3,12 @@
 pub mod command;
 pub mod file_ops;
 pub mod process;
+pub mod process_registry;
 pub mod screen;
 pub mod service;
 pub mod sysinfo;
+
+pub use process_registry::ProcessRegistry;
 
 use serde_json::{json, Value};
 

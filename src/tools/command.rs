@@ -2,13 +2,29 @@
 //! Executes PowerShell scripts and shell/CMD commands silently in the background
 //! with timeout protection and stdout/stderr capture.
 
+use crate::tools::process_registry::ProcessRegistry;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+
+static NEXT_PROC_ID: AtomicU64 = AtomicU64::new(1);
+
+struct SubprocessGuard {
+    id: u64,
+    registry: Arc<ProcessRegistry>,
+}
+
+impl Drop for SubprocessGuard {
+    fn drop(&mut self) {
+        self.registry.unregister_process(self.id);
+    }
+}
 
 /// Output of a command execution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -40,6 +56,14 @@ fn run_command(mut cmd: Command, timeout_secs: u64) -> Result<CommandResult, Str
     cmd.stderr(Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn process: {}", e))?;
+
+    let proc_id = NEXT_PROC_ID.fetch_add(1, Ordering::SeqCst);
+    let registry = ProcessRegistry::global();
+    registry.register_process(proc_id, child.id());
+    let _guard = SubprocessGuard {
+        id: proc_id,
+        registry: registry.clone(),
+    };
 
     let mut stdout_pipe = child.stdout.take();
     let mut stderr_pipe = child.stderr.take();

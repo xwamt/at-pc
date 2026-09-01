@@ -2,7 +2,6 @@
 
 use crate::server::auth::validate_auth_header;
 use crate::server::state::AppState;
-use crate::utils::security::verify_pin;
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -34,13 +33,22 @@ pub fn is_request_authenticated(
     headers: &HeaderMap,
     raw_query: Option<&str>,
 ) -> bool {
+    if state.is_stopped() {
+        return false;
+    }
+
+    let current_pin = state.get_pin();
+    if current_pin.is_empty() {
+        return false;
+    }
+
     let auth_header = headers.get("Authorization").and_then(|v| v.to_str().ok());
-    if validate_auth_header(&state.pin, auth_header) {
+    if validate_auth_header(&current_pin, auth_header) {
         return true;
     }
 
     if let Some(token) = extract_token_from_query(raw_query) {
-        if verify_pin(&state.pin, &token) {
+        if state.verify_pin(&token) {
             return true;
         }
     }
@@ -93,7 +101,7 @@ pub async fn sse_handler(
     let (tx, rx) = mpsc::channel::<Event>(32);
 
     // Send initial endpoint announcement
-    let endpoint_uri = format!("/messages?token={}", state.pin);
+    let endpoint_uri = format!("/messages?token={}", state.get_pin());
     let initial_event = Event::default().event("endpoint").data(endpoint_uri);
     let _ = tx.send(initial_event).await;
 
