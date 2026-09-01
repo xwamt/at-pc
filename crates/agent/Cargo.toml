@@ -20,6 +20,8 @@ toml = { workspace = true }
 futures-util = { workspace = true }
 ring = { workspace = true }
 rand = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
