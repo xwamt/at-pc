@@ -46,7 +46,17 @@ fn apply_no_window(cmd: &mut Command) {
 fn apply_no_window(_cmd: &mut Command) {}
 
 /// Runs a command with the given timeout in seconds and captures its output.
-fn run_command(mut cmd: Command, timeout_secs: u64) -> Result<CommandResult, String> {
+#[allow(dead_code)]
+pub fn run_command(cmd: Command, timeout_secs: u64) -> Result<CommandResult, String> {
+    run_command_with_registry(cmd, timeout_secs, &ProcessRegistry::global())
+}
+
+/// Runs a command with the given timeout and registers it in the specified ProcessRegistry.
+pub fn run_command_with_registry(
+    mut cmd: Command,
+    timeout_secs: u64,
+    registry: &Arc<ProcessRegistry>,
+) -> Result<CommandResult, String> {
     let timeout = if timeout_secs == 0 { 30 } else { timeout_secs };
     let timeout_duration = Duration::from_secs(timeout);
     let start_time = Instant::now();
@@ -58,7 +68,6 @@ fn run_command(mut cmd: Command, timeout_secs: u64) -> Result<CommandResult, Str
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn process: {}", e))?;
 
     let proc_id = NEXT_PROC_ID.fetch_add(1, Ordering::SeqCst);
-    let registry = ProcessRegistry::global();
     registry.register_process(proc_id, child.id());
     let _guard = SubprocessGuard {
         id: proc_id,
@@ -130,15 +139,20 @@ fn run_command(mut cmd: Command, timeout_secs: u64) -> Result<CommandResult, Str
 }
 
 /// Executes a PowerShell script in a hidden background process.
-///
-/// # Arguments
-/// * `script` - PowerShell script or command block.
-/// * `timeout_secs` - Execution timeout in seconds (default: 30).
-/// * `cwd` - Optional working directory.
 pub fn exec_powershell(
     script: &str,
     timeout_secs: u64,
     cwd: Option<&str>,
+) -> Result<CommandResult, String> {
+    exec_powershell_with_registry(script, timeout_secs, cwd, &ProcessRegistry::global())
+}
+
+/// Executes a PowerShell script with a specific ProcessRegistry.
+pub fn exec_powershell_with_registry(
+    script: &str,
+    timeout_secs: u64,
+    cwd: Option<&str>,
+    registry: &Arc<ProcessRegistry>,
 ) -> Result<CommandResult, String> {
     #[cfg(windows)]
     {
@@ -155,28 +169,26 @@ pub fn exec_powershell(
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        run_command(cmd, timeout_secs)
+        run_command_with_registry(cmd, timeout_secs, registry)
     }
 
     #[cfg(not(windows))]
     {
-        // Try pwsh first if available, otherwise fallback to sh -c for unix cross-platform compatibility
         let mut pwsh_cmd = Command::new("pwsh");
         pwsh_cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
         if let Some(dir) = cwd {
             pwsh_cmd.current_dir(dir);
         }
 
-        match run_command(pwsh_cmd, timeout_secs) {
+        match run_command_with_registry(pwsh_cmd, timeout_secs, registry) {
             Ok(res) => Ok(res),
             Err(e) if e.contains("No such file or directory") || e.contains("not found") => {
-                // Fallback to sh
                 let mut sh_cmd = Command::new("sh");
                 sh_cmd.args(["-c", script]);
                 if let Some(dir) = cwd {
                     sh_cmd.current_dir(dir);
                 }
-                run_command(sh_cmd, timeout_secs)
+                run_command_with_registry(sh_cmd, timeout_secs, registry)
             }
             Err(e) => Err(e),
         }
@@ -184,15 +196,20 @@ pub fn exec_powershell(
 }
 
 /// Executes a command in the system shell (`cmd.exe` on Windows, `sh` on Unix).
-///
-/// # Arguments
-/// * `command` - Shell command string.
-/// * `timeout_secs` - Execution timeout in seconds (default: 30).
-/// * `cwd` - Optional working directory.
 pub fn exec_cmd(
     command: &str,
     timeout_secs: u64,
     cwd: Option<&str>,
+) -> Result<CommandResult, String> {
+    exec_cmd_with_registry(command, timeout_secs, cwd, &ProcessRegistry::global())
+}
+
+/// Executes a command in the system shell with a specific ProcessRegistry.
+pub fn exec_cmd_with_registry(
+    command: &str,
+    timeout_secs: u64,
+    cwd: Option<&str>,
+    registry: &Arc<ProcessRegistry>,
 ) -> Result<CommandResult, String> {
     #[cfg(windows)]
     {
@@ -202,7 +219,7 @@ pub fn exec_cmd(
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        run_command(cmd, timeout_secs)
+        run_command_with_registry(cmd, timeout_secs, registry)
     }
 
     #[cfg(not(windows))]
@@ -212,6 +229,6 @@ pub fn exec_cmd(
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        run_command(cmd, timeout_secs)
+        run_command_with_registry(cmd, timeout_secs, registry)
     }
 }

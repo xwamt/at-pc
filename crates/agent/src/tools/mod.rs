@@ -212,6 +212,15 @@ pub fn get_mcp_tool_definitions() -> Vec<Value> {
 
 /// Dispatches an MCP tool call by name with parsed JSON arguments.
 pub fn dispatch_tool(name: &str, arguments: Value) -> Result<Value, String> {
+    dispatch_tool_with_registry(name, arguments, &ProcessRegistry::global())
+}
+
+/// Dispatches an MCP tool call using the specified ProcessRegistry for subprocesses.
+pub fn dispatch_tool_with_registry(
+    name: &str,
+    arguments: Value,
+    registry: &std::sync::Arc<ProcessRegistry>,
+) -> Result<Value, String> {
     match name {
         "get_system_overview" => {
             let overview = sysinfo::get_system_overview();
@@ -231,7 +240,7 @@ pub fn dispatch_tool(name: &str, arguments: Value) -> Result<Value, String> {
 
             let cwd = arguments.get("cwd").and_then(|v| v.as_str());
 
-            let res = command::exec_powershell(script, timeout_secs, cwd)?;
+            let res = command::exec_powershell_with_registry(script, timeout_secs, cwd, registry)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
 
@@ -248,7 +257,7 @@ pub fn dispatch_tool(name: &str, arguments: Value) -> Result<Value, String> {
 
             let cwd = arguments.get("cwd").and_then(|v| v.as_str());
 
-            let res = command::exec_cmd(cmd_str, timeout_secs, cwd)?;
+            let res = command::exec_cmd_with_registry(cmd_str, timeout_secs, cwd, registry)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
 

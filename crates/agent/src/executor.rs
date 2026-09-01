@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 use serde_json::Value;
-use crate::tools::dispatch_tool;
+use crate::tools::dispatch_tool_with_registry;
 use crate::tools::process_registry::ProcessRegistry;
 
 /// Agent local execution engine
@@ -13,19 +13,25 @@ pub struct AgentExecutor {
 }
 
 impl AgentExecutor {
-    /// Creates a new AgentExecutor instance.
+    /// Creates a new AgentExecutor instance with its own isolated ProcessRegistry.
     pub fn new() -> Self {
         Self {
-            process_registry: ProcessRegistry::global(),
+            process_registry: Arc::new(ProcessRegistry::new()),
         }
+    }
+
+    /// Creates an AgentExecutor with a custom ProcessRegistry.
+    pub fn with_registry(process_registry: Arc<ProcessRegistry>) -> Self {
+        Self { process_registry }
     }
 
     /// Executes an MCP diagnostic tool by name with arguments.
     /// Runs on a blocking thread to avoid blocking the Tokio async runtime.
     pub async fn execute(&self, tool_name: &str, arguments: Value) -> Result<Value, String> {
         let name = tool_name.to_string();
+        let registry = self.process_registry.clone();
         tokio::task::spawn_blocking(move || {
-            dispatch_tool(&name, arguments)
+            dispatch_tool_with_registry(&name, arguments, &registry)
         })
         .await
         .map_err(|e| format!("Task join error: {}", e))?

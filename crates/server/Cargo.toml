@@ -20,3 +20,4 @@ toml = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+at-pc-agent = { path = "../agent" }

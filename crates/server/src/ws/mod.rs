@@ -39,9 +39,18 @@ pub async fn start_ws_server_with_state(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
+    start_ws_server_with_listener(state, listener).await
+}
+
+/// Start WebSocket server with given WsServerState on an existing TcpListener
+pub async fn start_ws_server_with_listener(
+    state: WsServerState,
+    listener: TcpListener,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let local_addr = listener.local_addr()?;
     info!(
-        "WebSocket gateway listening on ws://0.0.0.0:{}{}",
-        port, state.config.ws_path
+        "WebSocket gateway listening on ws://{}{}",
+        local_addr, state.config.ws_path
     );
 
     loop {
