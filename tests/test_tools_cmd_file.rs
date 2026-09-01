@@ -186,3 +186,58 @@ fn test_mcp_dispatch_read_text_file() {
 
     let _ = std::fs::remove_file(&test_file);
 }
+
+#[test]
+fn test_read_file_multibyte_utf8_truncation() {
+    let temp_dir = std::env::temp_dir();
+    let file_name = format!(
+        "at_pc_test_utf8_{}.txt",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+    let test_file = temp_dir.join(file_name);
+    let test_file_str = test_file.to_str().unwrap();
+
+    // Chinese characters are 3 bytes each, Emoji are 4 bytes each
+    // "你好世界🚀🎉"
+    // "你好世界" -> 4 * 3 = 12 bytes
+    // "🚀🎉" -> 2 * 4 = 8 bytes
+    // Total = 20 bytes
+    let content = "你好世界🚀🎉";
+    let _ = file_ops::write_text_file(test_file_str, content, false).expect("write failed");
+
+    // Test truncating at every single byte offset (1..=20) to ensure zero panics on non-boundary slices
+    for max_b in 1..=content.len() {
+        let read_res = file_ops::read_text_file(test_file_str, None, Some(max_b));
+        assert!(read_res.is_ok(), "read_text_file should not panic on max_bytes={}", max_b);
+        let res = read_res.unwrap();
+        assert!(res.bytes_read <= max_b);
+        assert_eq!(res.bytes_read, res.content.len());
+        // Verify res.content is valid UTF-8 and is a prefix of content
+        assert!(content.starts_with(&res.content));
+    }
+
+    // Specific boundary checks:
+    // max_bytes = 4: should yield "你" (3 bytes), not panic at byte 4 of "好" (bytes 3..6)
+    let res_4 = file_ops::read_text_file(test_file_str, None, Some(4)).unwrap();
+    assert_eq!(res_4.content, "你");
+    assert_eq!(res_4.bytes_read, 3);
+    assert!(res_4.truncated);
+
+    // max_bytes = 14: 12 bytes ("你好世界") + 2 bytes into "🚀" (bytes 12..16) -> should truncate to "你好世界" (12 bytes)
+    let res_14 = file_ops::read_text_file(test_file_str, None, Some(14)).unwrap();
+    assert_eq!(res_14.content, "你好世界");
+    assert_eq!(res_14.bytes_read, 12);
+    assert!(res_14.truncated);
+
+    // max_bytes = 16: exactly includes "你好世界🚀" (16 bytes)
+    let res_16 = file_ops::read_text_file(test_file_str, None, Some(16)).unwrap();
+    assert_eq!(res_16.content, "你好世界🚀");
+    assert_eq!(res_16.bytes_read, 16);
+    assert!(res_16.truncated);
+
+    // Cleanup
+    let _ = std::fs::remove_file(&test_file);
+}

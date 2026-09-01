@@ -87,9 +87,12 @@ impl ProcessRegistry {
 
             #[cfg(windows)]
             {
-                let _ = Command::new("taskkill")
-                    .args(["/F", "/T", "/PID", &pid.to_string()])
-                    .output();
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                let mut cmd = Command::new("taskkill");
+                cmd.args(["/F", "/T", "/PID", &pid.to_string()]);
+                cmd.creation_flags(CREATE_NO_WINDOW);
+                let _ = cmd.output();
             }
         }
 

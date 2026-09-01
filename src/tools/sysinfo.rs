@@ -177,15 +177,19 @@ pub fn get_default_gateway() -> String {
 
 #[cfg(target_os = "windows")]
 pub fn get_default_gateway() -> String {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
     // 1. Try PowerShell Get-NetRoute
-    let output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -First 1).NextHop",
-        ])
-        .output();
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -First 1).NextHop",
+    ]);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd.output();
 
     if let Ok(out) = output {
         if out.status.success() {
@@ -197,10 +201,10 @@ pub fn get_default_gateway() -> String {
     }
 
     // 2. Fallback: route print 0.0.0.0
-    if let Ok(out) = std::process::Command::new("cmd")
-        .args(["/C", "route print 0.0.0.0"])
-        .output()
-    {
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args(["/C", "route print 0.0.0.0"]);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    if let Ok(out) = cmd.output() {
         if out.status.success() {
             let text = String::from_utf8_lossy(&out.stdout);
             for line in text.lines() {
@@ -317,17 +321,21 @@ pub fn get_dns_servers() -> Vec<String> {
 
 #[cfg(target_os = "windows")]
 pub fn get_dns_servers() -> Vec<String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
     let mut servers = Vec::new();
 
     // 1. Try PowerShell Get-DnsClientServerAddress
-    let output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "(Get-DnsClientServerAddress -AddressFamily IPv4).ServerAddresses",
-        ])
-        .output();
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "(Get-DnsClientServerAddress -AddressFamily IPv4).ServerAddresses",
+    ]);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd.output();
 
     if let Ok(out) = output {
         if out.status.success() {
@@ -343,10 +351,10 @@ pub fn get_dns_servers() -> Vec<String> {
 
     // 2. Fallback: ipconfig /all
     if servers.is_empty() {
-        if let Ok(out) = std::process::Command::new("cmd")
-            .args(["/C", "ipconfig /all"])
-            .output()
-        {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/C", "ipconfig /all"]);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        if let Ok(out) = cmd.output() {
             if out.status.success() {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let mut in_dns_section = false;
