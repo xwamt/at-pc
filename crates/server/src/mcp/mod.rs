@@ -1,3 +1,4 @@
+pub mod dashboard;
 pub mod tools;
 
 use std::convert::Infallible;
@@ -35,12 +36,14 @@ pub struct McpHttpState {
 pub fn create_mcp_http_router(router: Arc<McpRouter>, config: ServerConfig) -> Router {
     let state = McpHttpState { router, config };
     Router::new()
+        .merge(dashboard::create_dashboard_router())
         .route("/sse", get(sse_handler))
         .route("/messages", post(messages_handler))
         .route("/health", get(health_handler))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
+
 
 /// Check request authentication using ServerConfig.auth_token
 fn is_request_authenticated(config: &ServerConfig, headers: &HeaderMap, query: Option<&str>) -> bool {
