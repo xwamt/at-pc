@@ -35,6 +35,7 @@ fn run_command(mut cmd: Command, timeout_secs: u64) -> Result<CommandResult, Str
     let timeout_duration = Duration::from_secs(timeout);
     let start_time = Instant::now();
 
+    cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
