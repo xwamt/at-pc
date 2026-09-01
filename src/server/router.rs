@@ -148,7 +148,7 @@ fn handle_single_jsonrpc_request(state: &AppState, request: &Value, client_ip: &
                 },
                 "serverInfo": {
                     "name": "at-pc",
-                    "version": "0.1.0"
+                    "version": env!("CARGO_PKG_VERSION")
                 }
             });
             Ok(res)

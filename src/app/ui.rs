@@ -76,7 +76,7 @@ impl eframe::App for PcTroubleshooterApp {
                 ui.heading("💻 at-pc 远程协助助手");
             });
             ui.label(
-                egui::RichText::new("LAN MCP Remote Troubleshooter (v0.1.0)")
+                egui::RichText::new(format!("LAN MCP Remote Troubleshooter (v{})", env!("CARGO_PKG_VERSION")))
                     .weak()
                     .size(11.0),
             );
