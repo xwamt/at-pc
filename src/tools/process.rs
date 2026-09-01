@@ -78,11 +78,11 @@ pub fn list_processes(
             procs.sort_by_key(|p| p.pid);
         }
         "name" => {
-            procs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            procs.sort_by_key(|p| p.name.to_lowercase());
         }
         _ => {
             // Default: sort by memory descending
-            procs.sort_by(|a, b| b.memory_mb.cmp(&a.memory_mb));
+            procs.sort_by_key(|p| std::cmp::Reverse(p.memory_mb));
         }
     }
 

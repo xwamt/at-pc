@@ -25,7 +25,8 @@ fn test_gui_audit_logs_streaming() {
     let state = Arc::new(AppState::new("5678".to_string(), 9801));
     let mut gui_state = GuiState::new("10.0.0.2".to_string(), state.clone());
 
-    assert_eq!(gui_state.audit_logs.len(), 0);
+    assert_eq!(gui_state.audit_logs.len(), 1);
+    assert_eq!(gui_state.audit_logs[0].tool_name, "server_startup");
 
     // Broadcast multiple audit entries
     state.broadcast_audit(AuditLogEntry::new(
@@ -57,13 +58,14 @@ fn test_gui_audit_logs_streaming() {
 
     gui_state.poll_audit_logs();
 
-    assert_eq!(gui_state.audit_logs.len(), 3);
-    assert_eq!(gui_state.audit_logs[0].tool_name, "get_system_overview");
-    assert_eq!(gui_state.audit_logs[0].status, "SUCCESS");
-    assert_eq!(gui_state.audit_logs[1].tool_name, "capture_screen");
+    assert_eq!(gui_state.audit_logs.len(), 4);
+    assert_eq!(gui_state.audit_logs[0].tool_name, "server_startup");
+    assert_eq!(gui_state.audit_logs[1].tool_name, "get_system_overview");
     assert_eq!(gui_state.audit_logs[1].status, "SUCCESS");
-    assert_eq!(gui_state.audit_logs[2].tool_name, "kill_process");
-    assert_eq!(gui_state.audit_logs[2].status, "FAILED");
+    assert_eq!(gui_state.audit_logs[2].tool_name, "capture_screen");
+    assert_eq!(gui_state.audit_logs[2].status, "SUCCESS");
+    assert_eq!(gui_state.audit_logs[3].tool_name, "kill_process");
+    assert_eq!(gui_state.audit_logs[3].status, "FAILED");
 }
 
 #[test]

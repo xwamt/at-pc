@@ -155,9 +155,7 @@ fn handle_single_jsonrpc_request(state: &AppState, request: &Value) -> Option<Va
 
         "notifications/initialized" => {
             // Notification from client: no response required in standard JSON-RPC if id is null
-            if id.is_none() {
-                return None;
-            }
+            let _ = id.as_ref()?;
             Ok(json!({}))
         }
 

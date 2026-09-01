@@ -32,12 +32,21 @@ impl GuiState {
         let port = server_state.port;
         let pin = server_state.pin.clone();
 
+        let initial_entry = AuditLogEntry::new(
+            "server_startup",
+            serde_json::json!({ "port": port }),
+            "SUCCESS",
+            None,
+            None,
+            Some(format!("服务已在 0.0.0.0:{} 启动，等待工程师连接...", port)),
+        );
+
         Self {
             lan_ip,
             port,
             pin,
             server_state,
-            audit_logs: Vec::new(),
+            audit_logs: vec![initial_entry],
             audit_rx,
             last_copied_time: None,
             is_stopped: false,
@@ -59,6 +68,12 @@ impl GuiState {
                     break;
                 }
             }
+        }
+
+        const MAX_LOGS: usize = 500;
+        if self.audit_logs.len() > MAX_LOGS {
+            let drain_count = self.audit_logs.len() - MAX_LOGS;
+            self.audit_logs.drain(0..drain_count);
         }
     }
 
@@ -113,6 +128,8 @@ mod tests {
         assert_eq!(gui_state.pin, "8888");
         assert_eq!(gui_state.connected_clients(), 0);
         assert!(!gui_state.is_stopped);
+        assert_eq!(gui_state.audit_logs.len(), 1);
+        assert_eq!(gui_state.audit_logs[0].tool_name, "server_startup");
 
         let config_str = gui_state.generate_mcp_config();
         let config: serde_json::Value = serde_json::from_str(&config_str).unwrap();
@@ -137,13 +154,33 @@ mod tests {
         app_state.broadcast_audit(entry.clone());
 
         gui_state.poll_audit_logs();
-        assert_eq!(gui_state.audit_logs.len(), 1);
-        assert_eq!(gui_state.audit_logs[0].tool_name, "get_system_overview");
+        assert_eq!(gui_state.audit_logs.len(), 2);
+        assert_eq!(gui_state.audit_logs[1].tool_name, "get_system_overview");
 
         // Test emergency stop
         gui_state.trigger_emergency_stop();
         assert!(gui_state.is_stopped);
-        assert_eq!(gui_state.audit_logs.len(), 2);
-        assert_eq!(gui_state.audit_logs[1].tool_name, "emergency_stop");
+        assert_eq!(gui_state.audit_logs.len(), 3);
+        assert_eq!(gui_state.audit_logs[2].tool_name, "emergency_stop");
+    }
+
+    #[test]
+    fn test_gui_audit_logs_capping() {
+        let app_state = Arc::new(AppState::new("8888".to_string(), 9800));
+        let mut gui_state = GuiState::new("192.168.1.100".to_string(), app_state.clone());
+
+        for i in 0..600 {
+            app_state.broadcast_audit(AuditLogEntry::new(
+                format!("tool_{}", i),
+                serde_json::json!({}),
+                "SUCCESS",
+                None,
+                None,
+                None,
+            ));
+        }
+
+        gui_state.poll_audit_logs();
+        assert_eq!(gui_state.audit_logs.len(), 500);
     }
 }
