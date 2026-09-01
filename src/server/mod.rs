@@ -49,3 +49,8 @@ pub async fn start_server(state: Arc<AppState>, port: u16) -> JoinHandle<()> {
 
     server_task
 }
+
+/// Triggers graceful shutdown on the running MCP server.
+pub fn stop_server(state: &AppState) {
+    state.trigger_shutdown();
+}

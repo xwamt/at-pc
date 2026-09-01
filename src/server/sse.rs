@@ -59,9 +59,10 @@ impl Drop for ClientSessionGuard {
     }
 }
 
-/// Stream wrapping mpsc receiver and the RAII guard.
+/// Stream wrapping mpsc receiver, sender reference, and the RAII guard.
 struct SseStreamWithGuard {
     rx: mpsc::Receiver<Event>,
+    _tx: mpsc::Sender<Event>,
     _guard: ClientSessionGuard,
 }
 
@@ -98,6 +99,7 @@ pub async fn sse_handler(
 
     let stream = SseStreamWithGuard {
         rx,
+        _tx: tx,
         _guard: ClientSessionGuard {
             state: state.clone(),
         },

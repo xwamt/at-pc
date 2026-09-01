@@ -80,14 +80,14 @@ impl AppState {
         self.connected_clients.fetch_add(1, Ordering::SeqCst) + 1
     }
 
-    /// Decrements the active client count and returns the updated count.
+    /// Decrements the active client count and returns the updated count, preventing underflow.
     pub fn decrement_clients(&self) -> usize {
-        let prev = self.connected_clients.fetch_sub(1, Ordering::SeqCst);
-        if prev > 0 {
-            prev - 1
-        } else {
-            0
-        }
+        let _ = self
+            .connected_clients
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                Some(v.saturating_sub(1))
+            });
+        self.connected_clients.load(Ordering::SeqCst)
     }
 
     /// Returns the current active connected client count.

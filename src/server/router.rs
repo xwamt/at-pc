@@ -25,14 +25,34 @@ pub fn create_mcp_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Simple health and status check endpoint.
-async fn health_handler(State(state): State<Arc<AppState>>) -> Json<Value> {
-    Json(json!({
-        "status": "ok",
-        "service": "at-pc",
-        "port": state.port,
-        "connected_clients": state.connected_client_count(),
-    }))
+/// Authenticated health and status check endpoint.
+async fn health_handler(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+) -> Response {
+    let headers = req.headers().clone();
+    let query_str = req.uri().query().map(|s| s.to_string());
+
+    if !is_request_authenticated(&state, &headers, query_str.as_deref()) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": "Unauthorized: Invalid or missing PIN"
+            })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "service": "at-pc",
+            "port": state.port,
+            "connected_clients": state.connected_client_count(),
+        })),
+    )
+        .into_response()
 }
 
 /// JSON-RPC message handler (`POST /messages`).

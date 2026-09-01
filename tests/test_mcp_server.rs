@@ -1,6 +1,6 @@
 use at_pc::server::{
     router::create_mcp_router,
-    start_server,
+    start_server, stop_server,
     state::{AppState, AuditLogEntry},
 };
 use at_pc::tools::get_mcp_tool_definitions;
@@ -294,12 +294,64 @@ async fn test_server_lifecycle_and_shutdown() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Trigger shutdown
-    state.trigger_shutdown();
+    // Trigger shutdown via stop_server
+    stop_server(&state);
 
     // Wait for server task to finish
     tokio::time::timeout(tokio::time::Duration::from_secs(3), handle)
         .await
         .expect("Server should shut down gracefully within 3 seconds")
         .unwrap();
+}
+
+#[tokio::test]
+async fn test_health_endpoint_auth() {
+    let state = Arc::new(AppState::new("8888".to_string(), 9815));
+    let app = create_mcp_router(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    // 1. Unauthorized health check
+    let resp = client
+        .get(format!("http://{}/health", addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+
+    // 2. Authorized health check
+    let resp_auth = client
+        .get(format!("http://{}/health", addr))
+        .header("Authorization", "Bearer 8888")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp_auth.status(), 200);
+    let body: serde_json::Value = resp_auth.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["service"], "at-pc");
+}
+
+#[test]
+fn test_state_client_count_underflow_prevention() {
+    let state = AppState::new("1234".to_string(), 9800);
+    assert_eq!(state.connected_client_count(), 0);
+
+    // Decrementing from 0 should not underflow
+    assert_eq!(state.decrement_clients(), 0);
+    assert_eq!(state.connected_client_count(), 0);
+
+    // Increment and decrement
+    assert_eq!(state.increment_clients(), 1);
+    assert_eq!(state.connected_client_count(), 1);
+    assert_eq!(state.decrement_clients(), 0);
+    assert_eq!(state.connected_client_count(), 0);
+    assert_eq!(state.decrement_clients(), 0);
+    assert_eq!(state.connected_client_count(), 0);
 }
