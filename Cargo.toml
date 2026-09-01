@@ -1,0 +1,34 @@
+[package]
+name = "at-pc"
+version = "0.1.0"
+edition = "2021"
+description = "LAN-based Rust MCP Remote PC Troubleshooter"
+
+[dependencies]
+tokio = { version = "1.38", features = ["full"] }
+axum = { version = "0.7", features = ["macros"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sysinfo = "0.30"
+local-ip-address = "0.6"
+rand = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow"] }
+egui = "0.27"
+base64 = "0.22"
+xcap = "0.9"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_System_Services",
+    "Win32_Security",
+    "Win32_Foundation",
+    "Win32_System_Threading"
+] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json", "stream"] }
