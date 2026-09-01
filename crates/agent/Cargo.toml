@@ -1,0 +1,26 @@
+[package]
+name = "at-pc-agent"
+version = "0.3.0"
+edition = "2021"
+
+[dependencies]
+at-pc-protocol = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sysinfo = { workspace = true }
+local-ip-address = { workspace = true }
+base64 = { workspace = true }
+xcap = { workspace = true }
+image = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+toml = { workspace = true }
+futures-util = { workspace = true }
+ring = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+at-pc-server = { path = "../server" }
