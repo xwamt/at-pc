@@ -142,7 +142,7 @@ pub fn get_mcp_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "read_text_file",
-            "description": "Reads a log or configuration file with line-limiting and tail-reading options to prevent context overflow.",
+            "description": "Reads a log or configuration file with tail-reading (default: last 200 lines) and byte limits to prevent context window overflow. Pass tail_lines=0 for unlimited lines.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -152,7 +152,7 @@ pub fn get_mcp_tool_definitions() -> Vec<Value> {
                     },
                     "tail_lines": {
                         "type": "integer",
-                        "description": "Read only the last N lines (e.g., 100)."
+                        "description": "Read only the last N lines (default: 200). Pass 0 to disable line tailing and read the full file."
                     },
                     "max_bytes": {
                         "type": "integer",

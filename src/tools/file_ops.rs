@@ -28,11 +28,14 @@ pub struct FileWriteResult {
 /// Default byte limit for file reads (500 KB).
 pub const DEFAULT_MAX_BYTES: usize = 512_000;
 
+/// Default tail lines for file reads (200 lines).
+pub const DEFAULT_TAIL_LINES: usize = 200;
+
 /// Reads a text file safely with options for tail-reading and maximum byte limits.
 ///
 /// # Arguments
 /// * `file_path` - Path to the file.
-/// * `tail_lines` - If specified, returns only the last N lines.
+/// * `tail_lines` - If `None`, defaults to reading the last 200 lines. If `Some(0)`, line-tailing is disabled (full file read up to `max_bytes`). If `Some(n)` (n > 0), returns only the last N lines.
 /// * `max_bytes` - If specified, restricts output size to at most N bytes (default: 512,000).
 pub fn read_text_file(
     file_path: &str,
@@ -54,14 +57,11 @@ pub fn read_text_file(
     let total_lines = lines.len();
 
     let mut truncated = false;
-    let mut content = if let Some(n) = tail_lines {
-        if n > 0 && total_lines > n {
-            truncated = true;
-            let start = total_lines - n;
-            lines[start..].join("\n")
-        } else {
-            text
-        }
+    let effective_tail_lines = tail_lines.unwrap_or(DEFAULT_TAIL_LINES);
+    let mut content = if effective_tail_lines > 0 && total_lines > effective_tail_lines {
+        truncated = true;
+        let start = total_lines - effective_tail_lines;
+        lines[start..].join("\n")
     } else {
         text
     };

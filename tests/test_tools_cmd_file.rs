@@ -59,6 +59,39 @@ fn test_read_file_tail_lines() {
 }
 
 #[test]
+fn test_read_file_default_tail_200_lines() {
+    let temp_dir = std::env::temp_dir();
+    let file_name = format!("at_pc_test_default_tail_{}.txt", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+    let test_file = temp_dir.join(file_name);
+    let test_file_str = test_file.to_str().unwrap();
+
+    // Generate file with 300 lines
+    let lines: Vec<String> = (1..=300).map(|i| format!("line {}", i)).collect();
+    let content = lines.join("\n");
+    let _ = file_ops::write_text_file(test_file_str, &content, false).expect("write failed");
+
+    // 1. None tail_lines -> defaults to last 200 lines
+    let read_default = file_ops::read_text_file(test_file_str, None, None).expect("read default tail failed");
+    assert_eq!(read_default.total_lines, 300);
+    assert!(read_default.truncated, "Default read on 300-line file should be truncated");
+    let default_lines: Vec<&str> = read_default.content.lines().collect();
+    assert_eq!(default_lines.len(), 200);
+    assert_eq!(default_lines.first(), Some(&"line 101"));
+    assert_eq!(default_lines.last(), Some(&"line 300"));
+
+    // 2. Some(0) tail_lines -> unlimited (all 300 lines)
+    let read_all = file_ops::read_text_file(test_file_str, Some(0), None).expect("read all lines failed");
+    assert_eq!(read_all.total_lines, 300);
+    assert!(!read_all.truncated, "Some(0) read should not be truncated");
+    let all_lines: Vec<&str> = read_all.content.lines().collect();
+    assert_eq!(all_lines.len(), 300);
+    assert_eq!(all_lines.first(), Some(&"line 1"));
+    assert_eq!(all_lines.last(), Some(&"line 300"));
+
+    let _ = std::fs::remove_file(&test_file);
+}
+
+#[test]
 fn test_read_file_max_bytes() {
     let temp_dir = std::env::temp_dir();
     let file_name = format!("at_pc_test_bytes_{}.txt", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
@@ -121,4 +154,35 @@ fn test_exec_cmd_timeout() {
     assert!(res.is_err(), "Command should have timed out");
     let err_msg = res.unwrap_err();
     assert!(err_msg.contains("timed out"), "Error should mention timeout: {}", err_msg);
+}
+
+#[test]
+fn test_mcp_dispatch_read_text_file() {
+    use at_pc::tools::dispatch_mcp_tool;
+    use serde_json::json;
+
+    let temp_dir = std::env::temp_dir();
+    let file_name = format!("at_pc_test_mcp_read_{}.txt", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+    let test_file = temp_dir.join(file_name);
+    let test_file_str = test_file.to_str().unwrap();
+
+    let lines: Vec<String> = (1..=250).map(|i| format!("line {}", i)).collect();
+    let content = lines.join("\n");
+    let _ = file_ops::write_text_file(test_file_str, &content, false).expect("write failed");
+
+    // Dispatch without tail_lines -> defaults to 200
+    let res_default = dispatch_mcp_tool("read_text_file", json!({ "file_path": test_file_str })).expect("dispatch failed");
+    assert_eq!(res_default["total_lines"], 250);
+    assert_eq!(res_default["truncated"], true);
+    let text = res_default["content"].as_str().unwrap();
+    assert_eq!(text.lines().count(), 200);
+
+    // Dispatch with tail_lines = 0 -> unlimited
+    let res_all = dispatch_mcp_tool("read_text_file", json!({ "file_path": test_file_str, "tail_lines": 0 })).expect("dispatch failed");
+    assert_eq!(res_all["total_lines"], 250);
+    assert_eq!(res_all["truncated"], false);
+    let text_all = res_all["content"].as_str().unwrap();
+    assert_eq!(text_all.lines().count(), 250);
+
+    let _ = std::fs::remove_file(&test_file);
 }
