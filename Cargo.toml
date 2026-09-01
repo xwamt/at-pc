@@ -21,6 +21,8 @@ base64 = "0.22"
 xcap = "0.9"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 chrono = { version = "0.4", features = ["serde"] }
+futures-core = "0.3"
+futures-util = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = [

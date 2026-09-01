@@ -261,6 +261,8 @@ dependencies = [
  "chrono",
  "eframe",
  "egui",
+ "futures-core",
+ "futures-util",
  "image 0.25.10",
  "local-ip-address",
  "rand 0.8.8",
