@@ -7,13 +7,96 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, watch};
 
+/// Status for audit log entries. Serializes to uppercase and supports case-insensitive deserialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum AuditLogStatus {
+    #[serde(alias = "success", alias = "SUCCESS")]
+    Success,
+    #[serde(alias = "failed", alias = "FAILED")]
+    Failed,
+    #[serde(alias = "error", alias = "ERROR")]
+    Error,
+    #[serde(alias = "stopped", alias = "STOPPED")]
+    Stopped,
+    #[serde(alias = "started", alias = "STARTED")]
+    Started,
+}
+
+impl AuditLogStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AuditLogStatus::Success => "SUCCESS",
+            AuditLogStatus::Failed => "FAILED",
+            AuditLogStatus::Error => "ERROR",
+            AuditLogStatus::Stopped => "STOPPED",
+            AuditLogStatus::Started => "STARTED",
+        }
+    }
+}
+
+impl std::fmt::Display for AuditLogStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl From<&str> for AuditLogStatus {
+    fn from(s: &str) -> Self {
+        match s.to_ascii_uppercase().as_str() {
+            "SUCCESS" => AuditLogStatus::Success,
+            "FAILED" => AuditLogStatus::Failed,
+            "ERROR" => AuditLogStatus::Error,
+            "STOPPED" => AuditLogStatus::Stopped,
+            "STARTED" => AuditLogStatus::Started,
+            _ => AuditLogStatus::Success,
+        }
+    }
+}
+
+impl From<String> for AuditLogStatus {
+    fn from(s: String) -> Self {
+        AuditLogStatus::from(s.as_str())
+    }
+}
+
+impl PartialEq<&str> for AuditLogStatus {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str().eq_ignore_ascii_case(other)
+    }
+}
+
+impl PartialEq<str> for AuditLogStatus {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str().eq_ignore_ascii_case(other)
+    }
+}
+
+impl PartialEq<String> for AuditLogStatus {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str().eq_ignore_ascii_case(other)
+    }
+}
+
+impl PartialEq<AuditLogStatus> for &str {
+    fn eq(&self, other: &AuditLogStatus) -> bool {
+        other.as_str().eq_ignore_ascii_case(self)
+    }
+}
+
+impl PartialEq<AuditLogStatus> for String {
+    fn eq(&self, other: &AuditLogStatus) -> bool {
+        other.as_str().eq_ignore_ascii_case(self)
+    }
+}
+
 /// Audit log entry representing an MCP tool invocation or system lifecycle event.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuditLogEntry {
     pub timestamp: String,
     pub tool_name: String,
     pub parameters: serde_json::Value,
-    pub status: String,
+    pub status: AuditLogStatus,
     pub duration_ms: Option<u64>,
     pub client_ip: Option<String>,
     pub message: Option<String>,
@@ -24,7 +107,7 @@ impl AuditLogEntry {
     pub fn new(
         tool_name: impl Into<String>,
         parameters: serde_json::Value,
-        status: impl Into<String>,
+        status: impl Into<AuditLogStatus>,
         duration_ms: Option<u64>,
         client_ip: Option<String>,
         message: Option<String>,
@@ -144,13 +227,18 @@ impl AppState {
         let stop_entry = AuditLogEntry::new(
             "emergency_stop",
             serde_json::json!({}),
-            "STOPPED",
+            AuditLogStatus::Stopped,
             None,
             None,
             Some("服务已通过紧急熔断开关停止".to_string()),
         );
         self.broadcast_audit(stop_entry);
         self.trigger_shutdown();
+    }
+
+    /// Subscribes to the audit log broadcast channel.
+    pub fn subscribe_audit(&self) -> broadcast::Receiver<AuditLogEntry> {
+        self.audit_sender.subscribe()
     }
 
     /// Broadcasts an audit log entry to all subscribers.

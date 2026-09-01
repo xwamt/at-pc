@@ -1,7 +1,7 @@
 //! MCP JSON-RPC router and endpoint handlers.
 
-use crate::server::sse::{is_request_authenticated, sse_handler};
-use crate::server::state::{AppState, AuditLogEntry};
+use crate::server::sse::{extract_client_ip, is_request_authenticated, sse_handler};
+use crate::server::state::{AppState, AuditLogEntry, AuditLogStatus};
 use crate::tools::{dispatch_mcp_tool, get_mcp_tool_definitions};
 use axum::{
     extract::{Request, State},
@@ -62,6 +62,7 @@ pub async fn messages_handler(
 ) -> Response {
     let headers = req.headers().clone();
     let query_str = req.uri().query().map(|s| s.to_string());
+    let client_ip = extract_client_ip(&req);
 
     // 1. Authenticate request before parsing body
     if !is_request_authenticated(&state, &headers, query_str.as_deref()) {
@@ -118,12 +119,12 @@ pub async fn messages_handler(
     if let Some(arr) = payload.as_array() {
         let mut responses = Vec::new();
         for item in arr {
-            if let Some(resp) = handle_single_jsonrpc_request(&state, item) {
+            if let Some(resp) = handle_single_jsonrpc_request(&state, item, &client_ip) {
                 responses.push(resp);
             }
         }
         (StatusCode::OK, Json(json!(responses))).into_response()
-    } else if let Some(resp) = handle_single_jsonrpc_request(&state, &payload) {
+    } else if let Some(resp) = handle_single_jsonrpc_request(&state, &payload, &client_ip) {
         (StatusCode::OK, Json(resp)).into_response()
     } else {
         (StatusCode::ACCEPTED, Json(json!({}))).into_response()
@@ -131,7 +132,7 @@ pub async fn messages_handler(
 }
 
 /// Processes a single JSON-RPC 2.0 request.
-fn handle_single_jsonrpc_request(state: &AppState, request: &Value) -> Option<Value> {
+fn handle_single_jsonrpc_request(state: &AppState, request: &Value, client_ip: &str) -> Option<Value> {
     let method = request.get("method").and_then(|m| m.as_str())?;
     let id = request.get("id").cloned();
     let params = request.get("params").cloned().unwrap_or(Value::Null);
@@ -192,9 +193,9 @@ fn handle_single_jsonrpc_request(state: &AppState, request: &Value) -> Option<Va
                     state.broadcast_audit(AuditLogEntry::new(
                         tool_name,
                         tool_args,
-                        "success",
+                        AuditLogStatus::Success,
                         Some(duration_ms),
-                        None,
+                        Some(client_ip.to_string()),
                         None,
                     ));
 
@@ -212,9 +213,9 @@ fn handle_single_jsonrpc_request(state: &AppState, request: &Value) -> Option<Va
                     state.broadcast_audit(AuditLogEntry::new(
                         tool_name,
                         tool_args,
-                        "error",
+                        AuditLogStatus::Error,
                         Some(duration_ms),
-                        None,
+                        Some(client_ip.to_string()),
                         Some(err.clone()),
                     ));
 

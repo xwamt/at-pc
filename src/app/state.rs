@@ -35,7 +35,7 @@ impl GuiState {
         let initial_entry = AuditLogEntry::new(
             "server_startup",
             serde_json::json!({ "port": port }),
-            "SUCCESS",
+            crate::server::state::AuditLogStatus::Started,
             None,
             None,
             Some(format!("服务已在 0.0.0.0:{} 启动，等待工程师连接...", port)),

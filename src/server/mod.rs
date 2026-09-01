@@ -6,7 +6,7 @@ pub mod sse;
 pub mod state;
 
 pub use router::create_mcp_router;
-pub use state::{AppState, AuditLogEntry};
+pub use state::{AppState, AuditLogEntry, AuditLogStatus};
 
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -31,7 +31,10 @@ pub async fn start_server(state: Arc<AppState>, port: u16) -> JoinHandle<()> {
     };
 
     let server_task = tokio::spawn(async move {
-        let serve_future = axum::serve(listener, app);
+        let serve_future = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        );
 
         let graceful_future = serve_future.with_graceful_shutdown(async move {
             while !*shutdown_rx.borrow_and_update() {

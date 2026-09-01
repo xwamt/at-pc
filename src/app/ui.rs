@@ -1,7 +1,7 @@
 //! UI rendering and layout components using egui/eframe.
 
 use crate::app::state::GuiState;
-use crate::server::state::AppState;
+use crate::server::state::{AppState, AuditLogStatus};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -231,19 +231,29 @@ impl eframe::App for PcTroubleshooterApp {
                                                 .size(11.0),
                                         );
 
-                                        let (status_tag, tag_color) = match entry.status.as_str() {
-                                            "SUCCESS" | "STARTED" => {
-                                                ("✓", egui::Color32::from_rgb(60, 200, 90))
+                                        let (status_tag, tag_color) = match entry.status {
+                                            AuditLogStatus::Success => {
+                                                ("✓ SUCCESS", egui::Color32::from_rgb(60, 200, 90))
                                             }
-                                            "FAILED" | "ERROR" | "STOPPED" => {
-                                                ("✗", egui::Color32::from_rgb(240, 70, 70))
+                                            AuditLogStatus::Started => {
+                                                ("▶ STARTED", egui::Color32::from_rgb(80, 170, 240))
                                             }
-                                            _ => ("●", egui::Color32::from_rgb(100, 160, 240)),
+                                            AuditLogStatus::Stopped => {
+                                                ("⏹ STOPPED", egui::Color32::from_rgb(220, 120, 50))
+                                            }
+                                            AuditLogStatus::Failed => {
+                                                ("✗ FAILED", egui::Color32::from_rgb(240, 70, 70))
+                                            }
+                                            AuditLogStatus::Error => {
+                                                ("✗ ERROR", egui::Color32::from_rgb(240, 70, 70))
+                                            }
                                         };
                                         ui.label(
                                             egui::RichText::new(status_tag)
                                                 .color(tag_color)
-                                                .strong(),
+                                                .strong()
+                                                .monospace()
+                                                .size(11.0),
                                         );
 
                                         ui.label(
