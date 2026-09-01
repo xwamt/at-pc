@@ -48,7 +48,7 @@ async fn health_handler(
         Json(json!({
             "status": "ok",
             "service": "at-pc",
-            "port": state.port,
+            "port": state.get_port(),
             "connected_clients": state.connected_client_count(),
         })),
     )

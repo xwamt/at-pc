@@ -23,13 +23,15 @@ pub struct GuiState {
     pub last_copied_time: Option<Instant>,
     /// Whether the server has been manually stopped/disconnected.
     pub is_stopped: bool,
+    /// Whether to show the confirmation modal when rotating PIN while active sessions exist.
+    pub show_rotate_confirm: bool,
 }
 
 impl GuiState {
     /// Creates a new `GuiState` instance.
     pub fn new(lan_ip: String, server_state: Arc<AppState>) -> Self {
         let audit_rx = server_state.audit_sender.subscribe();
-        let port = server_state.port;
+        let port = server_state.get_port();
         let pin = server_state.get_pin();
 
         let initial_entry = AuditLogEntry::new(
@@ -50,6 +52,7 @@ impl GuiState {
             audit_rx,
             last_copied_time: None,
             is_stopped: false,
+            show_rotate_confirm: false,
         }
     }
 
@@ -103,6 +106,28 @@ impl GuiState {
         self.is_stopped = true;
         self.server_state.trigger_emergency_stop();
         self.poll_audit_logs();
+    }
+
+    /// Rotates the security PIN and updates listening port in GuiState and server state.
+    pub fn rotate_credentials(&mut self, new_pin: Option<String>, new_port: Option<u16>) -> (String, u16) {
+        let (pin, port) = self.server_state.rotate_credentials(new_pin, new_port);
+        self.pin = pin.clone();
+        self.port = port;
+        self.poll_audit_logs();
+        (pin, port)
+    }
+
+    /// Restarts session after emergency stop, resetting state, generating new PIN, and respawning server.
+    pub fn restart_session(&mut self, port: Option<u16>) -> String {
+        let new_pin = self.server_state.restart_session(port);
+        self.pin = new_pin.clone();
+        self.port = self.server_state.get_port();
+        self.is_stopped = false;
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let _ = crate::server::restart_server(self.server_state.clone(), self.port);
+        }
+        self.poll_audit_logs();
+        new_pin
     }
 }
 

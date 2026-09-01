@@ -53,6 +53,18 @@ pub async fn start_server(state: Arc<AppState>, port: u16) -> JoinHandle<()> {
     server_task
 }
 
+/// Restarts or respawns the Axum MCP HTTP/SSE server task on the specified port.
+///
+/// Spawns a background task that runs `start_server(state, port)` and manages its lifecycle.
+pub fn restart_server(state: Arc<AppState>, port: u16) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let task = start_server(state, port).await;
+        if let Err(e) = task.await {
+            tracing::error!("Respawned MCP server task failed: {e}");
+        }
+    })
+}
+
 /// Triggers graceful shutdown on the running MCP server.
 pub fn stop_server(state: &AppState) {
     state.trigger_shutdown();

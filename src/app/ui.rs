@@ -158,7 +158,7 @@ impl eframe::App for PcTroubleshooterApp {
 
             ui.add_space(4.0);
 
-            // Copy MCP Config JSON Button & Feedback
+            // Action Buttons: Copy MCP Config JSON & Rotate PIN
             ui.horizontal(|ui| {
                 let copy_btn = ui.button(
                     egui::RichText::new("📋 一键复制 MCP 配置 JSON")
@@ -172,16 +172,33 @@ impl eframe::App for PcTroubleshooterApp {
                     self.state.last_copied_time = Some(Instant::now());
                 }
 
-                if let Some(copied_at) = self.state.last_copied_time {
-                    if copied_at.elapsed().as_secs() < 3 {
-                        ui.label(
-                            egui::RichText::new("✓ 已复制到剪贴板!")
-                                .color(egui::Color32::from_rgb(50, 200, 80))
-                                .strong(),
-                        );
+                let rotate_btn = ui.add_enabled(
+                    !self.state.is_stopped,
+                    egui::Button::new(
+                        egui::RichText::new("🔄 重新生成 PIN / 切换端口")
+                            .strong()
+                            .size(13.0),
+                    ),
+                );
+
+                if rotate_btn.clicked() {
+                    if self.state.connected_clients() > 0 {
+                        self.state.show_rotate_confirm = true;
+                    } else {
+                        self.state.rotate_credentials(None, None);
                     }
                 }
             });
+
+            if let Some(copied_at) = self.state.last_copied_time {
+                if copied_at.elapsed().as_secs() < 3 {
+                    ui.label(
+                        egui::RichText::new("✓ 已复制到剪贴板!")
+                            .color(egui::Color32::from_rgb(50, 200, 80))
+                            .strong(),
+                    );
+                }
+            }
 
             ui.add_space(6.0);
             ui.separator();
@@ -204,7 +221,7 @@ impl eframe::App for PcTroubleshooterApp {
                 .inner_margin(egui::Margin::same(8.0))
                 .rounding(6.0)
                 .show(ui, |ui| {
-                    let max_scroll_height = (ui.available_height() - 55.0).max(120.0);
+                    let max_scroll_height = (ui.available_height() - 75.0).max(120.0);
                     egui::ScrollArea::vertical()
                         .max_height(max_scroll_height)
                         .auto_shrink([false, false])
@@ -264,7 +281,7 @@ impl eframe::App for PcTroubleshooterApp {
                                         );
 
                                         if let Some(dur) = entry.duration_ms {
-                                            ui.label(
+                                             ui.label(
                                                 egui::RichText::new(format!("({}ms)", dur))
                                                     .weak()
                                                     .size(11.0),
@@ -293,24 +310,71 @@ impl eframe::App for PcTroubleshooterApp {
 
             ui.add_space(8.0);
 
-            // Emergency Disconnect Button (Footer)
-            let disconnect_btn = egui::Button::new(
-                egui::RichText::new("🔴 立即断开协助 (Emergency Stop)")
-                    .color(egui::Color32::WHITE)
-                    .strong()
-                    .size(14.0),
-            )
-            .fill(if self.state.is_stopped {
-                egui::Color32::from_rgb(100, 100, 100)
-            } else {
-                egui::Color32::from_rgb(200, 40, 40)
-            })
-            .min_size(egui::vec2(ui.available_width(), 36.0));
+            // Emergency Stop / Session Restart Section (Footer)
+            if self.state.is_stopped {
+                let restart_btn = egui::Button::new(
+                    egui::RichText::new("🟢 重新开始协助 (Start New Session)")
+                        .color(egui::Color32::WHITE)
+                        .strong()
+                        .size(14.0),
+                )
+                .fill(egui::Color32::from_rgb(40, 160, 70))
+                .min_size(egui::vec2(ui.available_width(), 36.0));
 
-            if ui.add_enabled(!self.state.is_stopped, disconnect_btn).clicked() {
-                self.state.trigger_emergency_stop();
+                if ui.add(restart_btn).clicked() {
+                    self.state.restart_session(None);
+                }
+
+                ui.add_space(4.0);
+
+                let disabled_stop_btn = egui::Button::new(
+                    egui::RichText::new("🔴 立即断开协助 (已停止)")
+                        .color(egui::Color32::from_rgb(180, 180, 180))
+                        .size(12.0),
+                )
+                .fill(egui::Color32::from_rgb(80, 80, 80))
+                .min_size(egui::vec2(ui.available_width(), 26.0));
+
+                let _ = ui.add_enabled(false, disabled_stop_btn);
+            } else {
+                let disconnect_btn = egui::Button::new(
+                    egui::RichText::new("🔴 立即断开协助 (Emergency Stop)")
+                        .color(egui::Color32::WHITE)
+                        .strong()
+                        .size(14.0),
+                )
+                .fill(egui::Color32::from_rgb(200, 40, 40))
+                .min_size(egui::vec2(ui.available_width(), 36.0));
+
+                if ui.add_enabled(true, disconnect_btn).clicked() {
+                    self.state.trigger_emergency_stop();
+                }
             }
         });
+
+        // Confirmation Modal for PIN Rotation
+        if self.state.show_rotate_confirm {
+            egui::Window::new("⚠️ 确认重新生成 PIN / 切换端口")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "当前有 {} 个活跃工程师会话正在协助中。\n重新生成 PIN 将导致当前会话立即断开失效。\n确定要继续重新生成并轮换吗？",
+                        self.state.connected_clients()
+                    ));
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("确定重新生成 (Confirm)").clicked() {
+                            self.state.rotate_credentials(None, None);
+                            self.state.show_rotate_confirm = false;
+                        }
+                        if ui.button("取消 (Cancel)").clicked() {
+                            self.state.show_rotate_confirm = false;
+                        }
+                    });
+                });
+        }
     }
 }
 

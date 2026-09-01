@@ -3,7 +3,7 @@
 use crate::tools::process_registry::ProcessRegistry;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, watch};
 
@@ -130,13 +130,13 @@ pub struct AppState {
     /// 4-digit PIN required for authentication, wrapped in RwLock for dynamic invalidation and rotation.
     pub pin: RwLock<String>,
     /// Active listening port.
-    pub port: u16,
+    pub port: AtomicU16,
     /// Number of active connected clients.
     pub connected_clients: AtomicUsize,
     /// Broadcast channel for real-time audit log streaming to UI and subscribers.
     pub audit_sender: broadcast::Sender<AuditLogEntry>,
     /// Watch channel to signal graceful server shutdown / emergency disconnect.
-    pub shutdown_sender: watch::Sender<bool>,
+    pub shutdown_sender: RwLock<watch::Sender<bool>>,
     /// Whether the server has been marked as stopped / killed.
     pub is_stopped: AtomicBool,
     /// Registry tracking spawned command subprocesses for clean emergency termination.
@@ -151,10 +151,10 @@ impl AppState {
 
         Self {
             pin: RwLock::new(pin),
-            port,
+            port: AtomicU16::new(port),
             connected_clients: AtomicUsize::new(0),
             audit_sender,
-            shutdown_sender,
+            shutdown_sender: RwLock::new(shutdown_sender),
             is_stopped: AtomicBool::new(false),
             process_registry: ProcessRegistry::global(),
         }
@@ -167,10 +167,10 @@ impl AppState {
 
         Self {
             pin: RwLock::new(pin),
-            port,
+            port: AtomicU16::new(port),
             connected_clients: AtomicUsize::new(0),
             audit_sender,
-            shutdown_sender,
+            shutdown_sender: RwLock::new(shutdown_sender),
             is_stopped: AtomicBool::new(false),
             process_registry: registry,
         }
@@ -267,13 +267,84 @@ impl AppState {
         self.connected_clients.load(Ordering::SeqCst)
     }
 
+    /// Returns the active listening port.
+    pub fn get_port(&self) -> u16 {
+        self.port.load(Ordering::SeqCst)
+    }
+
+    /// Updates the active listening port.
+    pub fn set_port(&self, port: u16) {
+        self.port.store(port, Ordering::SeqCst);
+    }
+
+    /// Rotates the security PIN and optionally updates the listening port.
+    ///
+    /// Generates a new 4-digit PIN (or uses provided `new_pin`), optionally updates port,
+    /// updates internal state, and broadcasts a `pin_rotated` audit log entry.
+    pub fn rotate_credentials(&self, new_pin: Option<String>, new_port: Option<u16>) -> (String, u16) {
+        let pin = new_pin.unwrap_or_else(crate::utils::security::generate_pin);
+        let port = new_port.unwrap_or_else(|| self.get_port());
+        self.set_pin(pin.clone());
+        self.set_port(port);
+
+        let entry = AuditLogEntry::new(
+            "pin_rotated",
+            serde_json::json!({ "port": port, "pin_length": pin.len() }),
+            AuditLogStatus::Success,
+            None,
+            None,
+            Some(format!("PIN 已轮换，服务端口: {}", port)),
+        );
+        self.broadcast_audit(entry);
+
+        (pin, port)
+    }
+
+    /// Restarts a session after emergency stop or manual reset.
+    ///
+    /// Resets `is_stopped` to false, creates a fresh shutdown watch channel,
+    /// generates a new PIN, updates port (if specified), and broadcasts `session_restarted` audit entry.
+    pub fn restart_session(&self, port: Option<u16>) -> String {
+        self.is_stopped.store(false, Ordering::SeqCst);
+        let (new_shutdown_tx, _) = watch::channel(false);
+        if let Ok(mut lock) = self.shutdown_sender.write() {
+            *lock = new_shutdown_tx;
+        }
+
+        let new_pin = crate::utils::security::generate_pin();
+        self.set_pin(new_pin.clone());
+
+        let port = port.unwrap_or_else(|| self.get_port());
+        self.set_port(port);
+
+        let entry = AuditLogEntry::new(
+            "session_restarted",
+            serde_json::json!({ "port": port }),
+            AuditLogStatus::Started,
+            None,
+            None,
+            Some(format!("会话已重新启动，新 PIN 已生成，监听端口: {}", port)),
+        );
+        self.broadcast_audit(entry);
+
+        new_pin
+    }
+
     /// Triggers graceful server shutdown.
     pub fn trigger_shutdown(&self) {
-        let _ = self.shutdown_sender.send(true);
+        if let Ok(sender) = self.shutdown_sender.read() {
+            let _ = sender.send(true);
+        }
     }
 
     /// Subscribes to the shutdown watch channel.
     pub fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
-        self.shutdown_sender.subscribe()
+        self.shutdown_sender
+            .read()
+            .map(|s| s.subscribe())
+            .unwrap_or_else(|_| {
+                let (_, rx) = watch::channel(false);
+                rx
+            })
     }
 }
