@@ -329,16 +329,21 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
           body: JSON.stringify({ tool: 'capture_screen', arguments: { quality: 80 } })
         });
         const data = await res.json();
-        if (data.success && data.result?.image_base64) {
-          const imgUrl = `data:image/jpeg;base64,${data.result.image_base64}`;
-          showModal(`终端 [${terminalId}] - 屏幕截图 (${data.result.width}x${data.result.height})`, `<img src="${imgUrl}" class="screenshot-img" />`);
+        const rawImg = data.result?.base64_data || data.result?.image_base64 || '';
+        if (data.success && rawImg) {
+          const imgUrl = rawImg.startsWith('data:') ? rawImg : `data:image/jpeg;base64,${rawImg}`;
+          const w = data.result.width || '';
+          const h = data.result.height || '';
+          const dim = (w && h) ? ` (${w}x${h})` : '';
+          showModal(`终端 [${terminalId}] - 屏幕截图${dim}`, `<img src="${imgUrl}" class="screenshot-img" alt="Screenshot" />`);
         } else {
-          showModal(`截图失败`, `<pre style="color: var(--danger)">${data.error || JSON.stringify(data.result)}</pre>`);
+          showModal(`截图失败`, `<pre style="color: var(--danger)">${data.error || JSON.stringify(data.result, null, 2)}</pre>`);
         }
       } catch (err) {
         showModal(`截图错误`, `<pre style="color: var(--danger)">${err.message}</pre>`);
       }
     }
+
 
     async function runCommandPrompt(terminalId) {
       const script = prompt(`请输入要在终端 [${terminalId}] 执行的 PowerShell 脚本:`, "Get-Process | Select-Object -First 5");
