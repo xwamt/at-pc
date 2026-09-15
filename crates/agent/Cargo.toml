@@ -1,6 +1,6 @@
 [package]
 name = "at-pc-agent"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]
@@ -20,9 +20,38 @@ toml = { workspace = true }
 futures-util = { workspace = true }
 ring = { workspace = true }
 rand = { workspace = true }
+tokio-tungstenite = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+rustls-pki-types = { workspace = true }
+webpki-roots = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+    "Win32_System_Console",
+    "Win32_System_Services",
+    "Win32_System_EventLog",
+    "Win32_Security",
+    "Win32_Foundation",
+] }
+windows = { version = "0.52", features = [
+    "Win32_UI_Accessibility",
+    "Win32_System_Com",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.23"
 
 [dev-dependencies]
 tokio = { workspace = true }
 at-pc-server = { path = "../server" }
+rcgen = { workspace = true }

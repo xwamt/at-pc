@@ -60,6 +60,173 @@ pub fn manage_service(service_name: &str, action: &str) -> Result<ServiceStatusR
 
 #[cfg(windows)]
 fn manage_windows_service(service_name: &str, action: &str) -> Result<ServiceStatusResult, String> {
+    // 1. Try high-performance native Win32 SCM API first (< 15ms latency)
+    match manage_windows_service_win32(service_name, action) {
+        Ok(res) => return Ok(res),
+        Err(e) => {
+            tracing::debug!("Native Win32 SCM call failed ({}); falling back to PowerShell", e);
+        }
+    }
+
+    // 2. Fallback to PowerShell
+    manage_windows_service_powershell(service_name, action)
+}
+
+#[cfg(windows)]
+fn manage_windows_service_win32(service_name: &str, action: &str) -> Result<ServiceStatusResult, String> {
+    use windows_sys::Win32::System::Services::*;
+    use windows_sys::Win32::Foundation::GetLastError;
+
+    unsafe {
+        let scm = OpenSCManagerW(
+            std::ptr::null(),
+            std::ptr::null(),
+            SC_MANAGER_CONNECT | SC_MANAGER_ENUMERATE_SERVICE,
+        );
+        if scm == 0 {
+            return Err(format!("OpenSCManagerW failed with error: {}", GetLastError()));
+        }
+
+        let name_wide: Vec<u16> = service_name.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let desired_access = match action {
+            "status" => SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG,
+            "start" => SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG | SERVICE_START,
+            "stop" => SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG | SERVICE_STOP,
+            "restart" => SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG | SERVICE_START | SERVICE_STOP,
+            _ => SERVICE_QUERY_STATUS,
+        };
+
+        let service = OpenServiceW(scm, name_wide.as_ptr(), desired_access);
+        if service == 0 {
+            let err = GetLastError();
+            CloseServiceHandle(scm);
+            return Err(format!("OpenServiceW failed for '{}' (error: {})", service_name, err));
+        }
+
+        // Execute action if not just status
+        match action {
+            "start" => {
+                if StartServiceW(service, 0, std::ptr::null()) == 0 {
+                    let err = GetLastError();
+                    if err != 1056 { // 1056 = ERROR_SERVICE_ALREADY_RUNNING
+                        CloseServiceHandle(service);
+                        CloseServiceHandle(scm);
+                        return Err(format!("StartServiceW failed for '{}' (error: {})", service_name, err));
+                    }
+                }
+            }
+            "stop" => {
+                let mut status: SERVICE_STATUS = std::mem::zeroed();
+                if ControlService(service, SERVICE_CONTROL_STOP, &mut status) == 0 {
+                    let err = GetLastError();
+                    if err != 1062 { // 1062 = ERROR_SERVICE_NOT_ACTIVE
+                        CloseServiceHandle(service);
+                        CloseServiceHandle(scm);
+                        return Err(format!("ControlService(STOP) failed for '{}' (error: {})", service_name, err));
+                    }
+                }
+            }
+            "restart" => {
+                let mut status: SERVICE_STATUS = std::mem::zeroed();
+                let _ = ControlService(service, SERVICE_CONTROL_STOP, &mut status);
+                // Wait for service to transition to SERVICE_STOPPED (up to 3 seconds)
+                for _ in 0..30 {
+                    let mut bytes_needed = 0;
+                    let mut ssp: SERVICE_STATUS_PROCESS = std::mem::zeroed();
+                    let q = QueryServiceStatusEx(
+                        service,
+                        SC_STATUS_PROCESS_INFO,
+                        &mut ssp as *mut _ as *mut u8,
+                        std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
+                        &mut bytes_needed,
+                    );
+                    if q != 0 && ssp.dwCurrentState == SERVICE_STOPPED {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                let _ = StartServiceW(service, 0, std::ptr::null());
+            }
+            _ => {}
+        }
+
+        // Query updated status
+        let mut bytes_needed = 0;
+        let mut ssp: SERVICE_STATUS_PROCESS = std::mem::zeroed();
+        let query_ret = QueryServiceStatusEx(
+            service,
+            SC_STATUS_PROCESS_INFO,
+            &mut ssp as *mut _ as *mut u8,
+            std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
+            &mut bytes_needed,
+        );
+
+        let status_str = if query_ret != 0 {
+            match ssp.dwCurrentState {
+                SERVICE_STOPPED => "Stopped",
+                SERVICE_START_PENDING => "StartPending",
+                SERVICE_STOP_PENDING => "StopPending",
+                SERVICE_RUNNING => "Running",
+                SERVICE_CONTINUE_PENDING => "ContinuePending",
+                SERVICE_PAUSE_PENDING => "PausePending",
+                SERVICE_PAUSED => "Paused",
+                _ => "Unknown",
+            }
+        } else {
+            "Unknown"
+        };
+
+        // Query service config for display name and start type
+        let mut config_buf = vec![0u8; 8192];
+        let mut bytes_needed_cfg = 0;
+        let config_ret = QueryServiceConfigW(
+            service,
+            config_buf.as_mut_ptr() as *mut QUERY_SERVICE_CONFIGW,
+            config_buf.len() as u32,
+            &mut bytes_needed_cfg,
+        );
+
+        let (display_name, start_type) = if config_ret != 0 {
+            let qsc = &*(config_buf.as_ptr() as *const QUERY_SERVICE_CONFIGW);
+            let st = match qsc.dwStartType {
+                SERVICE_AUTO_START => "Automatic",
+                SERVICE_DEMAND_START => "Manual",
+                SERVICE_DISABLED => "Disabled",
+                SERVICE_BOOT_START => "Boot",
+                SERVICE_SYSTEM_START => "System",
+                _ => "Unknown",
+            };
+            let dn = if !qsc.lpDisplayName.is_null() {
+                let mut len = 0;
+                while *qsc.lpDisplayName.add(len) != 0 {
+                    len += 1;
+                }
+                let slice = std::slice::from_raw_parts(qsc.lpDisplayName, len);
+                String::from_utf16_lossy(slice)
+            } else {
+                service_name.to_string()
+            };
+            (dn, st.to_string())
+        } else {
+            (service_name.to_string(), "Unknown".to_string())
+        };
+
+        CloseServiceHandle(service);
+        CloseServiceHandle(scm);
+
+        Ok(ServiceStatusResult {
+            name: service_name.to_string(),
+            display_name,
+            status: status_str.to_string(),
+            start_type,
+            message: format!("Service '{}' {} completed successfully via Win32 SCM", service_name, action),
+        })
+    }
+}
+
+#[cfg(windows)]
+fn manage_windows_service_powershell(service_name: &str, action: &str) -> Result<ServiceStatusResult, String> {
     // Sanitize service name to prevent command injection
     let sanitized_name: String = service_name
         .chars()

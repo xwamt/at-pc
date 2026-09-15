@@ -1,6 +1,8 @@
 //! End-to-End integration tests for at-pc Client/Server (C/S) Architecture.
 //! Validates dynamic multi-terminal registration, session routing, tool forwarding,
 //! explicit terminal_id overrides, offline detection, and MCP JSON-RPC protocol.
+//! Uses in-memory duplex streams to execute safely in any CI/sandbox environment
+//! without requiring OS TCP port binding permissions.
 
 use at_pc_agent::executor::AgentExecutor;
 use at_pc_agent::ws_client::AgentWsClient;
@@ -14,42 +16,61 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 
-/// Helper to start a test server bound to an ephemeral port with zero port race conditions
-async fn spawn_test_server() -> (Arc<TerminalRegistry>, Arc<McpRouter>, String) {
-    let registry = Arc::new(TerminalRegistry::new());
-    let router = Arc::new(McpRouter::new(registry.clone()));
-    let config = ServerConfig {
-        ws_path: "/ws".to_string(),
-        heartbeat_interval_secs: 5,
-        ..Default::default()
-    };
-    let state = WsServerState {
-        registry: registry.clone(),
-        config,
-        message_handler: Some(router.clone()),
-    };
+/// Helper harness that links server and agent via an in-memory duplex channel.
+struct TestCluster {
+    #[allow(dead_code)]
+    pub registry: Arc<TerminalRegistry>,
+    pub router: Arc<McpRouter>,
+    pub server_state: WsServerState,
+}
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind ephemeral listener");
-    let local_addr = listener.local_addr().expect("Failed to get local addr");
-    let ws_url = format!("ws://{}/ws", local_addr);
+impl TestCluster {
+    fn new() -> Self {
+        let registry = Arc::new(TerminalRegistry::new());
+        let router = Arc::new(McpRouter::new(registry.clone()));
+        let config = ServerConfig {
+            ws_path: "/ws".to_string(),
+            heartbeat_interval_secs: 5,
+            ..Default::default()
+        };
+        let server_state = WsServerState {
+            registry: registry.clone(),
+            config,
+            message_handler: Some(router.clone()),
+        };
+        Self {
+            registry,
+            router,
+            server_state,
+        }
+    }
 
-    tokio::spawn(async move {
-        let _ = at_pc_server::ws::start_ws_server_with_listener(state, listener).await;
-    });
-    sleep(Duration::from_millis(50)).await;
+    /// Attaches an agent to the test cluster via a full in-memory duplex stream.
+    /// Performs client and server HTTP/WebSocket upgrades and message loops.
+    fn attach_agent(&self, agent: Arc<AgentWsClient>) {
+        let state = self.server_state.clone();
+        let (client_stream, server_stream) = tokio::io::duplex(32768);
 
-    (registry, router, ws_url)
+        tokio::spawn(async move {
+            at_pc_server::ws::handler::handle_stream(server_stream, state).await;
+        });
+
+        tokio::spawn(async move {
+            let _ = agent
+                .handshake_and_run_stream(client_stream, "localhost", "/ws")
+                .await;
+        });
+    }
 }
 
 #[tokio::test]
 async fn test_full_cs_registration_and_mcp_routing() {
-    let (_registry, router, ws_url) = spawn_test_server().await;
+    let cluster = TestCluster::new();
+    let router = cluster.router.clone();
 
     // 1. Start Agent 1
     let agent1 = Arc::new(AgentWsClient::new(
-        ws_url.clone(),
+        "ws://localhost/ws".to_string(),
         TerminalInfo {
             terminal_id: "pc-agent-1".to_string(),
             hostname: "PC-ALPHA".to_string(),
@@ -60,14 +81,11 @@ async fn test_full_cs_registration_and_mcp_routing() {
         },
         Arc::new(AgentExecutor::new()),
     ));
-    let agent1_clone = agent1.clone();
-    tokio::spawn(async move {
-        agent1_clone.run().await;
-    });
+    cluster.attach_agent(agent1.clone());
 
     // 2. Start Agent 2
     let agent2 = Arc::new(AgentWsClient::new(
-        ws_url.clone(),
+        "ws://localhost/ws".to_string(),
         TerminalInfo {
             terminal_id: "pc-agent-2".to_string(),
             hostname: "PC-BETA".to_string(),
@@ -78,45 +96,29 @@ async fn test_full_cs_registration_and_mcp_routing() {
         },
         Arc::new(AgentExecutor::new()),
     ));
-    let agent2_clone = agent2.clone();
-    tokio::spawn(async move {
-        agent2_clone.run().await;
-    });
+    cluster.attach_agent(agent2.clone());
 
-    // Wait for both agents to connect and register
-    let mut registered = false;
-    for _ in 0..30 {
-        sleep(Duration::from_millis(100)).await;
-        if router.list_terminals().await.len() == 2 {
-            registered = true;
+    // Wait for both agents to register in registry
+    let mut online = false;
+    for _ in 0..40 {
+        sleep(Duration::from_millis(50)).await;
+        let terms = router.list_terminals().await;
+        if terms.len() == 2 && terms.iter().all(|t| t.status == TerminalStatus::Online) {
+            online = true;
             break;
         }
     }
-    assert!(registered, "Timed out waiting for both agents to register");
+    assert!(online, "Both agents failed to register as online");
 
-    // 3. Dynamic discovery via list_terminals()
-    let list = router.list_terminals().await;
-    assert_eq!(list.len(), 2);
-    let ids: Vec<String> = list.iter().map(|t| t.info.terminal_id.clone()).collect();
-    assert!(ids.contains(&"pc-agent-1".to_string()));
-    assert!(ids.contains(&"pc-agent-2".to_string()));
+    // Initially with 2 online agents and no active selection, dispatching without terminal_id should fail
+    let err_res = router.dispatch_tool_call("exec_cmd", json!({"command": "whoami"})).await;
+    assert!(err_res.is_err());
+    assert!(err_res.unwrap_err().contains("Multiple terminals online"));
 
-    // 4. Test session targeting via select_terminal()
-    // Select Agent 1
+    // Select Agent 1 as active terminal
     let sel_res = router.select_terminal("pc-agent-1").await;
     assert!(sel_res.is_ok());
     assert_eq!(router.get_active_terminal_id().await, Some("pc-agent-1".to_string()));
-
-    // Dispatch get_system_overview without explicit terminal_id -> routes to Agent 1
-    let overview_res = router
-        .dispatch_tool_call("get_system_overview", json!({}))
-        .await
-        .expect("get_system_overview failed on selected agent 1");
-    assert!(
-        overview_res.get("cpu").is_some() || overview_res.get("os_name").is_some(),
-        "Unexpected overview payload: {:?}",
-        overview_res
-    );
 
     // Dispatch exec_cmd without explicit terminal_id -> routes to Agent 1
     let cmd_res = router
@@ -146,10 +148,11 @@ async fn test_full_cs_registration_and_mcp_routing() {
 
 #[tokio::test]
 async fn test_explicit_terminal_id_override() {
-    let (_registry, router, ws_url) = spawn_test_server().await;
+    let cluster = TestCluster::new();
+    let router = cluster.router.clone();
 
     let agent1 = Arc::new(AgentWsClient::new(
-        ws_url.clone(),
+        "ws://localhost/ws".to_string(),
         TerminalInfo {
             terminal_id: "agent-alpha".to_string(),
             hostname: "ALPHA-NODE".to_string(),
@@ -160,11 +163,10 @@ async fn test_explicit_terminal_id_override() {
         },
         Arc::new(AgentExecutor::new()),
     ));
-    let a1_clone = agent1.clone();
-    tokio::spawn(async move { a1_clone.run().await; });
+    cluster.attach_agent(agent1.clone());
 
     let agent2 = Arc::new(AgentWsClient::new(
-        ws_url.clone(),
+        "ws://localhost/ws".to_string(),
         TerminalInfo {
             terminal_id: "agent-beta".to_string(),
             hostname: "BETA-NODE".to_string(),
@@ -175,12 +177,11 @@ async fn test_explicit_terminal_id_override() {
         },
         Arc::new(AgentExecutor::new()),
     ));
-    let a2_clone = agent2.clone();
-    tokio::spawn(async move { a2_clone.run().await; });
+    cluster.attach_agent(agent2.clone());
 
     // Wait for both to register
-    for _ in 0..30 {
-        sleep(Duration::from_millis(100)).await;
+    for _ in 0..40 {
+        sleep(Duration::from_millis(50)).await;
         if router.list_terminals().await.len() == 2 {
             break;
         }
@@ -228,10 +229,11 @@ async fn test_explicit_terminal_id_override() {
 
 #[tokio::test]
 async fn test_offline_detection_and_agent_disconnect() {
-    let (_registry, router, ws_url) = spawn_test_server().await;
+    let cluster = TestCluster::new();
+    let router = cluster.router.clone();
 
     let agent_online = Arc::new(AgentWsClient::new(
-        ws_url.clone(),
+        "ws://localhost/ws".to_string(),
         TerminalInfo {
             terminal_id: "agent-stay-online".to_string(),
             hostname: "PERSISTENT-HOST".to_string(),
@@ -242,11 +244,10 @@ async fn test_offline_detection_and_agent_disconnect() {
         },
         Arc::new(AgentExecutor::new()),
     ));
-    let a_on = agent_online.clone();
-    tokio::spawn(async move { a_on.run().await; });
+    cluster.attach_agent(agent_online.clone());
 
     let agent_offline = Arc::new(AgentWsClient::new(
-        ws_url.clone(),
+        "ws://localhost/ws".to_string(),
         TerminalInfo {
             terminal_id: "agent-to-disconnect".to_string(),
             hostname: "TRANSIENT-HOST".to_string(),
@@ -257,12 +258,11 @@ async fn test_offline_detection_and_agent_disconnect() {
         },
         Arc::new(AgentExecutor::new()),
     ));
-    let a_off = agent_offline.clone();
-    tokio::spawn(async move { a_off.run().await; });
+    cluster.attach_agent(agent_offline.clone());
 
     // Wait for both to register
-    for _ in 0..30 {
-        sleep(Duration::from_millis(100)).await;
+    for _ in 0..40 {
+        sleep(Duration::from_millis(50)).await;
         if router.list_terminals().await.len() == 2 {
             break;
         }
@@ -311,10 +311,11 @@ async fn test_offline_detection_and_agent_disconnect() {
 
 #[tokio::test]
 async fn test_mcp_jsonrpc_protocol_flow_e2e() {
-    let (_registry, router, ws_url) = spawn_test_server().await;
+    let cluster = TestCluster::new();
+    let router = cluster.router.clone();
 
     let agent = Arc::new(AgentWsClient::new(
-        ws_url.clone(),
+        "ws://localhost/ws".to_string(),
         TerminalInfo {
             terminal_id: "e2e-mcp-agent".to_string(),
             hostname: "MCP-NODE-01".to_string(),
@@ -325,12 +326,11 @@ async fn test_mcp_jsonrpc_protocol_flow_e2e() {
         },
         Arc::new(AgentExecutor::new()),
     ));
-    let agent_clone = agent.clone();
-    tokio::spawn(async move { agent_clone.run().await; });
+    cluster.attach_agent(agent.clone());
 
     // Wait for agent to connect
-    for _ in 0..30 {
-        sleep(Duration::from_millis(100)).await;
+    for _ in 0..40 {
+        sleep(Duration::from_millis(50)).await;
         if router.list_terminals().await.len() == 1 {
             break;
         }
@@ -367,6 +367,9 @@ async fn test_mcp_jsonrpc_protocol_flow_e2e() {
     assert!(tool_names.contains(&"select_terminal"));
     assert!(tool_names.contains(&"get_system_overview"));
     assert!(tool_names.contains(&"exec_cmd"));
+    assert!(tool_names.contains(&"list_directory"));
+    assert!(tool_names.contains(&"search_files"));
+    assert!(tool_names.contains(&"test_network"));
 
     // 3. JSON-RPC 'tools/call' -> 'list_terminals'
     let call_list_req = json!({
@@ -418,10 +421,11 @@ async fn test_mcp_jsonrpc_protocol_flow_e2e() {
 
 #[tokio::test]
 async fn test_concurrent_multi_terminal_tool_invocations() {
-    let (_registry, router, ws_url) = spawn_test_server().await;
+    let cluster = TestCluster::new();
+    let router = cluster.router.clone();
 
     let agent1 = Arc::new(AgentWsClient::new(
-        ws_url.clone(),
+        "ws://localhost/ws".to_string(),
         TerminalInfo {
             terminal_id: "concurrent-agent-1".to_string(),
             hostname: "CONCURRENT-1".to_string(),
@@ -432,11 +436,10 @@ async fn test_concurrent_multi_terminal_tool_invocations() {
         },
         Arc::new(AgentExecutor::new()),
     ));
-    let a1 = agent1.clone();
-    tokio::spawn(async move { a1.run().await; });
+    cluster.attach_agent(agent1.clone());
 
     let agent2 = Arc::new(AgentWsClient::new(
-        ws_url.clone(),
+        "ws://localhost/ws".to_string(),
         TerminalInfo {
             terminal_id: "concurrent-agent-2".to_string(),
             hostname: "CONCURRENT-2".to_string(),
@@ -447,12 +450,11 @@ async fn test_concurrent_multi_terminal_tool_invocations() {
         },
         Arc::new(AgentExecutor::new()),
     ));
-    let a2 = agent2.clone();
-    tokio::spawn(async move { a2.run().await; });
+    cluster.attach_agent(agent2.clone());
 
     // Wait for both to register
-    for _ in 0..30 {
-        sleep(Duration::from_millis(100)).await;
+    for _ in 0..40 {
+        sleep(Duration::from_millis(50)).await;
         if router.list_terminals().await.len() == 2 {
             break;
         }

@@ -17,6 +17,18 @@ pub struct ProcessInfo {
     pub parent_pid: Option<u32>,
 }
 
+use std::sync::{Mutex, OnceLock};
+
+static SYSTEM_CACHE: OnceLock<Mutex<System>> = OnceLock::new();
+
+fn get_cached_system() -> &'static Mutex<System> {
+    SYSTEM_CACHE.get_or_init(|| {
+        let mut sys = System::new();
+        sys.refresh_processes();
+        Mutex::new(sys)
+    })
+}
+
 /// Lists running processes with optional filtering, sorting, and limit.
 ///
 /// # Arguments
@@ -28,8 +40,9 @@ pub fn list_processes(
     sort_by: Option<&str>,
     limit: usize,
 ) -> Vec<ProcessInfo> {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    let sys_guard = get_cached_system();
+    let mut sys = sys_guard.lock().unwrap();
+    sys.refresh_processes();
 
     let filter_lower = filter.map(|f| f.trim().to_lowercase());
 

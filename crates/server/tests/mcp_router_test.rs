@@ -88,6 +88,62 @@ async fn test_select_terminal_and_session_memory() {
 }
 
 #[tokio::test]
+async fn test_session_scoped_active_terminal() {
+    let registry = Arc::new(TerminalRegistry::new());
+    let router = Arc::new(McpRouter::new(registry.clone()));
+    let (tx1, _rx1) = mpsc::unbounded_channel();
+    let (tx2, _rx2) = mpsc::unbounded_channel();
+
+    let info1 = TerminalInfo {
+        terminal_id: "agent-1".to_string(),
+        hostname: "HOST-1".to_string(),
+        username: "user1".to_string(),
+        lan_ip: "192.168.1.10".to_string(),
+        os_version: "Windows 11".to_string(),
+        agent_version: "0.3.0".to_string(),
+    };
+    let info2 = TerminalInfo {
+        terminal_id: "agent-2".to_string(),
+        hostname: "HOST-2".to_string(),
+        username: "user2".to_string(),
+        lan_ip: "192.168.1.20".to_string(),
+        os_version: "Windows 10".to_string(),
+        agent_version: "0.3.0".to_string(),
+    };
+    registry.register(info1, tx1).await;
+    registry.register(info2, tx2).await;
+
+    // Session A selects agent-1, Session B selects agent-2
+    assert!(router.select_terminal_for_session("session-a", "agent-1").await.is_ok());
+    assert!(router.select_terminal_for_session("session-b", "agent-2").await.is_ok());
+
+    assert_eq!(
+        router.get_active_terminal_id_for_session(Some("session-a")).await,
+        Some("agent-1".to_string())
+    );
+    assert_eq!(
+        router.get_active_terminal_id_for_session(Some("session-b")).await,
+        Some("agent-2".to_string())
+    );
+
+    // Target resolution respects session
+    assert_eq!(
+        router.resolve_target_terminal_with_session(None, Some("session-a")).await.unwrap(),
+        "agent-1"
+    );
+    assert_eq!(
+        router.resolve_target_terminal_with_session(None, Some("session-b")).await.unwrap(),
+        "agent-2"
+    );
+
+    // Explicit override takes precedence over session
+    assert_eq!(
+        router.resolve_target_terminal_with_session(Some("agent-2"), Some("session-a")).await.unwrap(),
+        "agent-2"
+    );
+}
+
+#[tokio::test]
 async fn test_dispatch_tool_call_meta_tools() {
     let registry = Arc::new(TerminalRegistry::new());
     let router = Arc::new(McpRouter::new(registry.clone()));
@@ -274,4 +330,143 @@ async fn test_mcp_jsonrpc_protocol_flow() {
     assert_eq!(call_ps_resp["result"]["isError"], false);
     let text = call_ps_resp["result"]["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("powershell output"));
+
+    // 5. tools/call capture_screen (MCP Image Format Verification)
+    let (tx_screen, mut rx_screen) = mpsc::unbounded_channel();
+    registry.register(TerminalInfo {
+        terminal_id: "screen-agent".to_string(),
+        hostname: "HOST-SCREEN".to_string(),
+        username: "user".to_string(),
+        lan_ip: "192.168.1.199".to_string(),
+        os_version: "macOS".to_string(),
+        agent_version: "1.0.0".to_string(),
+    }, tx_screen).await;
+
+    let router_for_screen = router.clone();
+    tokio::spawn(async move {
+        if let Some(ServerToAgentMessage::InvokeTool { call_id, tool_name, .. }) = rx_screen.recv().await {
+            assert_eq!(tool_name, "capture_screen");
+            router_for_screen.handle_tool_result(AgentToServerMessage::ToolResult {
+                call_id,
+                success: true,
+                result: json!({
+                    "display_index": 0,
+                    "width": 1920,
+                    "height": 1080,
+                    "format": "jpeg",
+                    "base64_data": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYEBQUFBAYFBh...",
+                    "raw_base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYEBQUFBAYFBh...",
+                    "file_path": "/tmp/test_screen.jpg"
+                }),
+                error: None,
+                duration_ms: 120,
+            }).await;
+        }
+    });
+
+    let call_screen_req = json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "capture_screen",
+            "arguments": {
+                "terminal_id": "screen-agent"
+            }
+        }
+    });
+    let call_screen_resp = handle_jsonrpc_request(&router, &call_screen_req).await.unwrap();
+    assert_eq!(call_screen_resp["result"]["isError"], false);
+    let contents = call_screen_resp["result"]["content"].as_array().unwrap();
+    assert_eq!(contents.len(), 2);
+    // Content 0: text summary
+    assert_eq!(contents[0]["type"], "text");
+    assert!(contents[0]["text"].as_str().unwrap().contains("1920x1080"));
+    assert!(contents[0]["text"].as_str().unwrap().contains("/tmp/test_screen.jpg"));
+    // Content 1: MCP image
+    assert_eq!(contents[1]["type"], "image");
+    assert_eq!(contents[1]["mimeType"], "image/jpeg");
+    let img_data = contents[1]["data"].as_str().unwrap();
+    assert!(!img_data.starts_with("data:"));
+    assert!(img_data.starts_with("/9j/"));
+}
+
+#[tokio::test]
+async fn test_capture_screen_server_save_path_and_image_base64() {
+    let registry = Arc::new(TerminalRegistry::new());
+    let router = Arc::new(McpRouter::new(registry.clone()));
+
+    let (tx_screen, mut rx_screen) = mpsc::unbounded_channel();
+    registry
+        .register(
+            TerminalInfo {
+                terminal_id: "screen-agent-save".to_string(),
+                hostname: "HOST-SAVE".to_string(),
+                username: "user".to_string(),
+                lan_ip: "192.168.1.200".to_string(),
+                os_version: "Windows 11".to_string(),
+                agent_version: "1.0.0".to_string(),
+            },
+            tx_screen,
+        )
+        .await;
+
+    let valid_jpeg_b64 = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
+
+    let router_for_screen = router.clone();
+    tokio::spawn(async move {
+        if let Some(ServerToAgentMessage::InvokeTool {
+            call_id,
+            tool_name,
+            ..
+        }) = rx_screen.recv().await
+        {
+            assert_eq!(tool_name, "capture_screen");
+            router_for_screen
+                .handle_tool_result(AgentToServerMessage::ToolResult {
+                    call_id,
+                    success: true,
+                    result: json!({
+                        "display_index": 0,
+                        "width": 1,
+                        "height": 1,
+                        "format": "jpeg",
+                        "base64_data": format!("data:image/jpeg;base64,{}", valid_jpeg_b64),
+                        "raw_base64": valid_jpeg_b64,
+                        "image_base64": valid_jpeg_b64,
+                        "data_uri": format!("data:image/jpeg;base64,{}", valid_jpeg_b64),
+                    }),
+                    error: None,
+                    duration_ms: 50,
+                })
+                .await;
+        }
+    });
+
+    let temp_save_file = std::env::temp_dir().join("at_pc_test_server_save.jpg");
+    let temp_save_str = temp_save_file.to_string_lossy().to_string();
+
+    let call_screen_req = json!({
+        "jsonrpc": "2.0",
+        "id": 101,
+        "method": "tools/call",
+        "params": {
+            "name": "capture_screen",
+            "arguments": {
+                "terminal_id": "screen-agent-save",
+                "server_save_path": temp_save_str
+            }
+        }
+    });
+
+    let call_screen_resp = handle_jsonrpc_request(&router, &call_screen_req).await.unwrap();
+    assert_eq!(call_screen_resp["result"]["isError"], false);
+    let contents = call_screen_resp["result"]["content"].as_array().unwrap();
+    assert_eq!(contents.len(), 2);
+    assert!(contents[0]["text"].as_str().unwrap().contains("Saved to server host disk"));
+
+    assert!(temp_save_file.exists());
+    let written = std::fs::read(&temp_save_file).unwrap();
+    assert!(written.starts_with(&[0xff, 0xd8, 0xff]));
+    let _ = std::fs::remove_file(temp_save_file);
 }

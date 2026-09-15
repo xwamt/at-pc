@@ -1,18 +1,48 @@
 use std::sync::Arc;
+use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use at_pc_protocol::messages::{AgentToServerMessage, ServerToAgentMessage};
+use at_pc_protocol::messages::{AgentToServerMessage, BinaryDesktopFrame, ServerToAgentMessage};
 use at_pc_protocol::models::{TerminalInfo, TerminalStatus};
+use base64::Engine;
 use crate::config::ServerConfig;
-use crate::ws::codec::{compute_accept_key, WsMessage, WsReader, WsWriter};
+use crate::ws::codec::compute_accept_key;
 use crate::ws::registry::TerminalRegistry;
 
 /// Trait for handling tool results and agent messages
 pub trait AgentMessageHandler: Send + Sync {
     fn handle_tool_result(&self, msg: AgentToServerMessage);
+    fn handle_terminal_disconnected(&self, _terminal_id: &str, _reason: &str) {}
+    #[allow(clippy::too_many_arguments)]
+    fn handle_desktop_frame(
+        &self,
+        _terminal_id: &str,
+        _display_index: u32,
+        _width: u32,
+        _height: u32,
+        _format: &str,
+        _data: &str,
+        _timestamp: u64,
+    ) {}
+    fn handle_desktop_frame_binary(
+        &self,
+        terminal_id: &str,
+        frame: BinaryDesktopFrame,
+    ) {
+        let b64 = base64::prelude::BASE64_STANDARD.encode(&frame.data);
+        self.handle_desktop_frame(
+            terminal_id,
+            frame.display_index,
+            frame.width,
+            frame.height,
+            "jpeg",
+            &b64,
+            frame.timestamp,
+        );
+    }
 }
 
 /// No-op implementation of AgentMessageHandler
@@ -62,7 +92,7 @@ impl WsServerState {
     }
 }
 
-/// Perform HTTP handshake upgrade to WebSocket on any AsyncRead + AsyncWrite stream
+/// Perform HTTP handshake upgrade to WebSocket on any AsyncRead + AsyncWrite stream (helper)
 pub async fn perform_ws_handshake<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     expected_path: &str,
@@ -79,8 +109,6 @@ pub async fn perform_ws_handshake<S: AsyncRead + AsyncWrite + Unpin>(
 
         if let Some(pos) = buffer[..total_read].windows(4).position(|w| w == b"\r\n\r\n") {
             let request_str = String::from_utf8_lossy(&buffer[..pos]);
-            
-            // Check request line and headers
             let lines: Vec<&str> = request_str.lines().collect();
             if lines.is_empty() {
                 return Ok(false);
@@ -109,7 +137,6 @@ pub async fn perform_ws_handshake<S: AsyncRead + AsyncWrite + Unpin>(
                 return Ok(false);
             }
 
-            // Extract Sec-WebSocket-Key
             let mut sec_ws_key = None;
             for line in &lines[1..] {
                 if let Some((k, v)) = line.split_once(':') {
@@ -147,70 +174,144 @@ pub async fn perform_ws_handshake<S: AsyncRead + AsyncWrite + Unpin>(
     Ok(false)
 }
 
-/// Handle a full connected TCP stream upgraded to WebSocket
+/// Handle a full connected TCP stream upgraded to WebSocket using standard production-grade WebSocket stack
 pub async fn handle_connection(stream: TcpStream, state: WsServerState) {
     handle_stream(stream, state).await;
 }
 
-/// Handle any connected async stream upgraded to WebSocket (useful for TCP and in-memory duplex testing)
+/// Handle any connected async stream upgraded to WebSocket using tokio-tungstenite
 pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
-    mut stream: S,
+    stream: S,
     state: WsServerState,
 ) {
     let ws_path = state.config.ws_path.clone();
-    match perform_ws_handshake(&mut stream, &ws_path).await {
-        Ok(true) => {}
-        Ok(false) => return,
+    #[allow(clippy::result_large_err)]
+    let callback = move |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                         resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
+        let path = req.uri().path();
+        if path == "/health" {
+            let res = tokio_tungstenite::tungstenite::http::Response::builder()
+                .status(200)
+                .body(Some("OK".to_string()))
+                .unwrap();
+            return Err(res);
+        }
+        if !ws_path.is_empty() && path != ws_path {
+            let res = tokio_tungstenite::tungstenite::http::Response::builder()
+                .status(404)
+                .body(Some("Not Found".to_string()))
+                .unwrap();
+            return Err(res);
+        }
+        Ok(resp)
+    };
+
+    let ws_connection = match tokio_tungstenite::accept_hdr_async(stream, callback).await {
+        Ok(ws) => ws,
         Err(e) => {
-            warn!("WebSocket handshake error: {}", e);
+            debug!("WebSocket handshake error: {}", e);
             return;
         }
-    }
+    };
 
-    let (reader, writer) = tokio::io::split(stream);
-    let mut ws_reader = WsReader::new(reader);
-    let mut ws_writer = WsWriter::new(writer);
+    let (mut ws_sink, mut ws_reader) = ws_connection.split();
 
     // 1. Initial Handshake: Wait for Register message
-    let (terminal_info, initial_sender_tx, mut initial_sender_rx) =
-        match wait_for_registration(&mut ws_reader, &mut ws_writer, &state).await {
+    let (terminal_info, initial_sender_tx, mut initial_sender_rx, session_id) =
+        match wait_for_registration(&mut ws_reader, &mut ws_sink, &state).await {
             Ok(res) => res,
             Err(err_msg) => {
                 warn!("WebSocket registration handshake failed: {}", err_msg);
-                let _ = ws_writer.write_message(&WsMessage::Close).await;
+                let _ = ws_sink.send(tokio_tungstenite::tungstenite::Message::Close(None)).await;
                 return;
             }
         };
 
     let terminal_id = terminal_info.terminal_id.clone();
     info!(
-        "Terminal [{}] ({}) successfully registered from IP: {}",
-        terminal_id, terminal_info.hostname, terminal_info.lan_ip
+        "Terminal [{}] ({}) successfully registered (session: {}) from IP: {}",
+        terminal_id, terminal_info.hostname, session_id, terminal_info.lan_ip
     );
 
-    // 2. Outgoing message forwarding task (MPSC channel -> WebSocket Writer)
+    // 2. Outgoing message forwarding task (MPSC channel -> WebSocket Sink)
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel::<tokio_tungstenite::tungstenite::Message>();
     let forwarder_tx = initial_sender_tx.clone();
     let term_id_for_send = terminal_id.clone();
     let forward_task = tokio::spawn(async move {
-        while let Some(msg) = initial_sender_rx.recv().await {
-            match serde_json::to_string(&msg) {
-                Ok(json) => {
-                    if let Err(e) = ws_writer.write_message(&WsMessage::Text(json)).await {
-                        warn!("Failed to send WS message to terminal [{}]: {}", term_id_for_send, e);
+        loop {
+            tokio::select! {
+                biased;
+
+                // Priority 0: RFC 6455 raw control frames (Pong, Close)
+                Some(ctrl_msg) = control_rx.recv() => {
+                    if let Err(e) = ws_sink.send(ctrl_msg).await {
+                        warn!("Failed to send control WS message to terminal [{}]: {}", term_id_for_send, e);
                         break;
                     }
                 }
-                Err(e) => {
-                    error!("Failed to serialize message for [{}]: {}", term_id_for_send, e);
+
+                // Priority 1: Application messages from server to terminal
+                Some(msg) = initial_sender_rx.recv() => {
+                    let mut final_msg = msg;
+                    if matches!(
+                        final_msg,
+                        ServerToAgentMessage::DesktopInput {
+                            event: at_pc_protocol::models::DesktopInputEvent::MouseMove { .. }
+                        }
+                    ) {
+                        while let Ok(next) = initial_sender_rx.try_recv() {
+                            let is_mouse_move = matches!(
+                                next,
+                                ServerToAgentMessage::DesktopInput {
+                                    event: at_pc_protocol::models::DesktopInputEvent::MouseMove { .. }
+                                }
+                            );
+                            if is_mouse_move {
+                                final_msg = next;
+                            } else {
+                                if let Ok(json) = serde_json::to_string(&final_msg) {
+                                    let _ = ws_sink.send(tokio_tungstenite::tungstenite::Message::Text(json)).await;
+                                }
+                                final_msg = next;
+                                break;
+                            }
+                        }
+                    }
+
+                    match serde_json::to_string(&final_msg) {
+                        Ok(json) => {
+                            let ws_msg = tokio_tungstenite::tungstenite::Message::Text(json);
+                            if let Err(e) = ws_sink.send(ws_msg).await {
+                                warn!("Failed to send WS message to terminal [{}]: {}", term_id_for_send, e);
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to serialize message for [{}]: {}", term_id_for_send, e);
+                        }
+                    }
                 }
+
+                else => break,
             }
         }
+        warn!("WebSocket forwarding task for [{}] exited.", term_id_for_send);
     });
 
     // 3. Incoming message loop (WebSocket Reader -> Registry & MessageHandler)
+    let idle_timeout = std::time::Duration::from_secs(state.config.offline_threshold_secs.max(15) * 2);
     loop {
-        match ws_reader.read_message().await {
-            Ok(WsMessage::Text(text)) => {
+        let msg_res = match tokio::time::timeout(idle_timeout, ws_reader.next()).await {
+            Ok(Some(res)) => res,
+            Ok(None) => break,
+            Err(_) => {
+                warn!("WebSocket read timed out for terminal [{}] (no message for {}s)", terminal_id, idle_timeout.as_secs());
+                break;
+            }
+        };
+
+        match msg_res {
+            Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
                 match serde_json::from_str::<AgentToServerMessage>(&text) {
                     Ok(agent_msg) => {
                         handle_agent_message(agent_msg, &terminal_id, &state, &forwarder_tx).await;
@@ -223,22 +324,35 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                     }
                 }
             }
-            Ok(WsMessage::Ping(_payload)) => {
-                debug!("Received ping from terminal [{}]", terminal_id);
-                let _ = forwarder_tx.send(ServerToAgentMessage::HeartbeatAck {
-                    server_timestamp: chrono::Utc::now().timestamp(),
-                });
+            Ok(tokio_tungstenite::tungstenite::Message::Binary(bin)) => {
+                if bin.starts_with(&BinaryDesktopFrame::MAGIC) {
+                    match BinaryDesktopFrame::decode(&bin) {
+                        Ok(frame) => {
+                            if let Some(ref handler) = state.message_handler {
+                                handler.handle_desktop_frame_binary(&terminal_id, frame);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to decode binary desktop frame from [{}]: {}", terminal_id, e);
+                        }
+                    }
+                } else {
+                    warn!("Received unexpected binary frame ({} bytes) from terminal [{}]", bin.len(), terminal_id);
+                }
             }
-            Ok(WsMessage::Pong(_)) => {
+            Ok(tokio_tungstenite::tungstenite::Message::Ping(payload)) => {
+                debug!("Received ping from terminal [{}] ({} bytes); replying with Pong", terminal_id, payload.len());
+                let _ = control_tx.send(tokio_tungstenite::tungstenite::Message::Pong(payload));
+            }
+            Ok(tokio_tungstenite::tungstenite::Message::Pong(_)) => {
                 debug!("Received pong from terminal [{}]", terminal_id);
             }
-            Ok(WsMessage::Close) => {
+            Ok(tokio_tungstenite::tungstenite::Message::Close(frame)) => {
                 info!("Terminal [{}] closed connection gracefully", terminal_id);
+                let _ = control_tx.send(tokio_tungstenite::tungstenite::Message::Close(frame));
                 break;
             }
-            Ok(WsMessage::Binary(_)) => {
-                warn!("Received unexpected binary frame from terminal [{}]", terminal_id);
-            }
+            Ok(tokio_tungstenite::tungstenite::Message::Frame(_)) => {}
             Err(e) => {
                 debug!("WebSocket connection ended for [{}]: {}", terminal_id, e);
                 break;
@@ -247,31 +361,40 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     }
 
     // 4. Cleanup on disconnect
-    info!("Terminal [{}] disconnected. Cleaning up session.", terminal_id);
-    state.registry.set_status(&terminal_id, TerminalStatus::Offline).await;
+    info!("Terminal [{}] disconnected. Cleaning up session {}.", terminal_id, session_id);
+    state.registry.set_status_if_current(&terminal_id, session_id, TerminalStatus::Offline).await;
+    if let Some(ref handler) = state.message_handler {
+        handler.handle_terminal_disconnected(&terminal_id, "WebSocket connection closed");
+    }
     forward_task.abort();
 }
 
 /// Wait for the first message to be a valid Register payload
-async fn wait_for_registration<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
-    reader: &mut WsReader<R>,
-    writer: &mut WsWriter<W>,
+async fn wait_for_registration<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    reader: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
+    sink: &mut futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, tokio_tungstenite::tungstenite::Message>,
     state: &WsServerState,
 ) -> Result<
     (
         TerminalInfo,
         mpsc::UnboundedSender<ServerToAgentMessage>,
         mpsc::UnboundedReceiver<ServerToAgentMessage>,
+        u64,
     ),
     String,
 > {
-    let first_msg = tokio::time::timeout(std::time::Duration::from_secs(10), reader.read_message())
+    let first_msg_opt = tokio::time::timeout(std::time::Duration::from_secs(10), reader.next())
         .await
-        .map_err(|_| "Timed out waiting for initial Register message".to_string())?
-        .map_err(|e| format!("WebSocket read error during handshake: {}", e))?;
+        .map_err(|_| "Timed out waiting for initial Register message".to_string())?;
+
+    let first_msg = match first_msg_opt {
+        Some(Ok(m)) => m,
+        Some(Err(e)) => return Err(format!("WebSocket read error during handshake: {}", e)),
+        None => return Err("Stream closed before Register message".to_string()),
+    };
 
     let text = match first_msg {
-        WsMessage::Text(t) => t,
+        tokio_tungstenite::tungstenite::Message::Text(t) => t,
         _ => return Err("Expected Text message containing Register frame".to_string()),
     };
 
@@ -289,14 +412,14 @@ async fn wait_for_registration<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                         heartbeat_interval_secs: state.config.heartbeat_interval_secs,
                     };
                     let json = serde_json::to_string(&ack).unwrap();
-                    let _ = writer.write_message(&WsMessage::Text(json)).await;
+                    let _ = sink.send(tokio_tungstenite::tungstenite::Message::Text(json)).await;
                     return Err("Authentication failed".to_string());
                 }
             }
 
             // Create outbound channel for this terminal session
             let (tx, rx) = mpsc::unbounded_channel::<ServerToAgentMessage>();
-            state.registry.register(info.clone(), tx.clone()).await;
+            let session_id = state.registry.register(info.clone(), tx.clone()).await;
 
             // Send success RegisterAck
             let ack = ServerToAgentMessage::RegisterAck {
@@ -305,12 +428,12 @@ async fn wait_for_registration<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                 heartbeat_interval_secs: state.config.heartbeat_interval_secs,
             };
             let json = serde_json::to_string(&ack).unwrap();
-            writer
-                .write_message(&WsMessage::Text(json))
+            sink
+                .send(tokio_tungstenite::tungstenite::Message::Text(json))
                 .await
                 .map_err(|e| format!("Failed to send RegisterAck: {}", e))?;
 
-            Ok((info, tx, rx))
+            Ok((info, tx, rx, session_id))
         }
         _ => Err("First message must be Register".to_string()),
     }
@@ -332,7 +455,6 @@ async fn handle_agent_message(
             if let Err(e) = state.registry.update_heartbeat(target_id, metrics).await {
                 warn!("Failed to update heartbeat for [{}]: {}", target_id, e);
             }
-            // Send HeartbeatAck
             let ack = ServerToAgentMessage::HeartbeatAck {
                 server_timestamp: chrono::Utc::now().timestamp(),
             };
@@ -349,10 +471,33 @@ async fn handle_agent_message(
             let target_id = if did.is_empty() { terminal_id } else { &did };
             info!("Terminal [{}] initiated disconnect: {}", target_id, reason);
             state.registry.set_status(target_id, TerminalStatus::Offline).await;
+            if let Some(ref handler) = state.message_handler {
+                handler.handle_terminal_disconnected(target_id, &reason);
+            }
         }
         AgentToServerMessage::Register { info, .. } => {
             debug!("Re-registering terminal [{}]", info.terminal_id);
             state.registry.register(info, tx.clone()).await;
+        }
+        AgentToServerMessage::DesktopFrame {
+            display_index,
+            width,
+            height,
+            format,
+            data,
+            timestamp,
+        } => {
+            if let Some(handler) = &state.message_handler {
+                handler.handle_desktop_frame(
+                    terminal_id,
+                    display_index,
+                    width,
+                    height,
+                    &format,
+                    &data,
+                    timestamp,
+                );
+            }
         }
     }
 }

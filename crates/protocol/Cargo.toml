@@ -1,6 +1,6 @@
 [package]
 name = "at-pc-protocol"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 description = "Shared communication protocol and models for at-pc C/S architecture"
 

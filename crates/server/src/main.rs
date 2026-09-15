@@ -19,9 +19,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("    at-pc-server [OPTIONS]\n");
         println!("OPTIONS:");
         println!("    --config <PATH>       Path to TOML configuration file");
+        println!("    --meta-file <PATH>    Path to JSON terminal metadata file");
+        println!("    --host <HOST>         Listen host address (default: 127.0.0.1)");
         println!("    --ws-port <PORT>      WebSocket listen port (default: 9801)");
         println!("    --mcp-port <PORT>     MCP HTTP/SSE listen port (default: 9800)");
         println!("    --auth-token <TOKEN>  Authentication token for agent registration");
+        println!("    --tls-cert <PATH>     Path to TLS certificate file for HTTPS / WSS");
+        println!("    --tls-key <PATH>      Path to TLS private key file for HTTPS / WSS");
+        println!("    --tls-ca <PATH>       Path to client CA certificate for mTLS");
+        println!("    --audit-file <PATH>   Path to JSONL audit log file (default: audit.jsonl)");
         println!("    --stdio               Run MCP server in stdio mode (for local IDE / Cursor)");
         println!("    -h, --help            Print help information");
         return Ok(());
@@ -30,15 +36,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let stdio_mode = args.iter().any(|a| a == "--stdio");
 
     // Configure logging (if in stdio mode, log to stderr only to avoid corrupting stdio JSON-RPC)
+    let log_file_path = match std::env::current_dir() {
+        Ok(p) if p != std::path::Path::new("/") => p.join("at-pc-server.log"),
+        _ => std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("at-pc-server.log")))
+            .unwrap_or_else(|| std::path::PathBuf::from("at-pc-server.log")),
+    };
+
+    let file_appender = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file_path)
+        .ok();
+
     if stdio_mode {
         tracing_subscriber::fmt()
             .with_max_level(Level::WARN)
             .with_writer(std::io::stderr)
             .init();
     } else {
+        use std::io::Write;
+        let file_shared = file_appender.map(|f| std::sync::Arc::new(std::sync::Mutex::new(f)));
         tracing_subscriber::fmt()
             .with_max_level(Level::INFO)
-            .with_writer(std::io::stdout)
+            .with_writer(move || {
+                struct DualWriter {
+                    file: Option<std::sync::Arc<std::sync::Mutex<std::fs::File>>>,
+                }
+                impl Write for DualWriter {
+                    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                        let _ = std::io::stdout().write(buf);
+                        if let Some(ref f_arc) = self.file {
+                            if let Ok(mut f) = f_arc.lock() {
+                                let _ = f.write_all(buf);
+                            }
+                        }
+                        Ok(buf.len())
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        let _ = std::io::stdout().flush();
+                        if let Some(ref f_arc) = self.file {
+                            if let Ok(mut f) = f_arc.lock() {
+                                let _ = f.flush();
+                            }
+                        }
+                        Ok(())
+                    }
+                }
+                DualWriter {
+                    file: file_shared.clone(),
+                }
+            })
             .init();
     }
 
@@ -63,6 +112,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Override with CLI flags
     for i in 0..args.len() {
+        if args[i] == "--host" && i + 1 < args.len() {
+            config.listen_host = args[i + 1].clone();
+        }
         if args[i] == "--ws-port" && i + 1 < args.len() {
             if let Ok(p) = args[i + 1].parse::<u16>() {
                 config.ws_port = p;
@@ -73,24 +125,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 config.mcp_port = p;
             }
         }
+        if args[i] == "--meta-file" && i + 1 < args.len() {
+            config.meta_store_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        }
         if args[i] == "--auth-token" && i + 1 < args.len() {
             config.auth_token = Some(args[i + 1].clone());
+        }
+        if args[i] == "--tls-cert" && i + 1 < args.len() {
+            config.tls_cert_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        }
+        if args[i] == "--tls-key" && i + 1 < args.len() {
+            config.tls_key_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        }
+        if args[i] == "--tls-ca" && i + 1 < args.len() {
+            config.tls_client_ca_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        }
+        if args[i] == "--audit-file" && i + 1 < args.len() {
+            config.audit_log_path = Some(std::path::PathBuf::from(&args[i + 1]));
         }
     }
 
     info!("Starting at-pc-server v{}", env!("CARGO_PKG_VERSION"));
-    info!("WebSocket port: {}, MCP port: {}", config.ws_port, config.mcp_port);
+    info!("Listen host: {}, WebSocket port: {}, MCP port: {}", config.listen_host, config.ws_port, config.mcp_port);
 
     // 2. Initialize Terminal Registry & sweep task
-    let registry = Arc::new(TerminalRegistry::with_threshold(Duration::from_secs(
-        config.offline_threshold_secs,
-    )));
+    let meta_file = config
+        .meta_store_path
+        .clone()
+        .unwrap_or_else(|| {
+            match std::env::current_dir() {
+                Ok(p) if p != std::path::Path::new("/") => p.join("terminals_meta.json"),
+                _ => std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.join("terminals_meta.json")))
+                    .unwrap_or_else(|| std::path::PathBuf::from("terminals_meta.json")),
+            }
+        });
+    let meta_store = Arc::new(at_pc_server::meta_store::TerminalMetaStore::new(meta_file));
+    let registry = Arc::new(TerminalRegistry::with_store(
+        Duration::from_secs(config.offline_threshold_secs),
+        meta_store,
+    ));
+    // 3. Initialize MCP Router & Audit Logger
+    let audit_logger = config.audit_log_path.clone().map(|p| Arc::new(at_pc_server::audit::AuditLogger::new(Some(p))));
+    let mut mcp_router = McpRouter::new(registry.clone());
+    if let Some(ref al) = audit_logger {
+        mcp_router = mcp_router.with_audit_logger(al.clone());
+    }
+    let router = Arc::new(mcp_router);
+
     let _sweep_handle = registry
         .clone()
-        .start_sweep_task(Duration::from_secs(config.sweep_interval_secs));
-
-    // 3. Initialize MCP Router
-    let router = Arc::new(McpRouter::new(registry.clone()));
+        .start_sweep_task_with_handler(Duration::from_secs(config.sweep_interval_secs), router.clone());
 
     // 4. Start WebSocket Gateway in background
     let ws_state = WsServerState::with_handler(registry.clone(), config.clone(), router.clone());
@@ -103,6 +189,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // 5. Run MCP gateway (stdio or HTTP/SSE)
     if stdio_mode {
+        // In stdio mode, also launch the MCP HTTP / Web Dashboard gateway in background so port 9800 is active
+        let http_router = router.clone();
+        let http_config = config.clone();
+        tokio::spawn(async move {
+            if let Err(e) = start_mcp_http_server(http_router, http_config).await {
+                error!("MCP HTTP/Web gateway error in stdio mode: {}", e);
+            }
+        });
+
         run_stdio_server(router).await?;
     } else {
         start_mcp_http_server(router, config).await?;

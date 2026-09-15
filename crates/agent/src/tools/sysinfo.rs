@@ -180,27 +180,7 @@ pub fn get_default_gateway() -> String {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    // 1. Try PowerShell Get-NetRoute
-    let mut cmd = std::process::Command::new("powershell");
-    cmd.args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -First 1).NextHop",
-    ]);
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    let output = cmd.output();
-
-    if let Ok(out) = output {
-        if out.status.success() {
-            let gw = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !gw.is_empty() && gw != "0.0.0.0" {
-                return gw;
-            }
-        }
-    }
-
-    // 2. Fallback: route print 0.0.0.0
+    // 1. Fast route print 0.0.0.0 via cmd (avoids PowerShell overhead / hang)
     let mut cmd = std::process::Command::new("cmd");
     cmd.args(["/C", "route print 0.0.0.0"]);
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -210,6 +190,25 @@ pub fn get_default_gateway() -> String {
             for line in text.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 3 && parts[0] == "0.0.0.0" && parts[1] == "0.0.0.0" {
+                    let gw = parts[2];
+                    if gw != "0.0.0.0" && !gw.is_empty() {
+                        return gw.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fallback: netstat -rn
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args(["/C", "netstat -rn"]);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    if let Ok(out) = cmd.output() {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 && (parts[0] == "0.0.0.0" || parts[0] == "default") {
                     let gw = parts[2];
                     if gw != "0.0.0.0" && !gw.is_empty() {
                         return gw.to_string();
@@ -326,56 +325,31 @@ pub fn get_dns_servers() -> Vec<String> {
 
     let mut servers = Vec::new();
 
-    // 1. Try PowerShell Get-DnsClientServerAddress
-    let mut cmd = std::process::Command::new("powershell");
-    cmd.args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "(Get-DnsClientServerAddress -AddressFamily IPv4).ServerAddresses",
-    ]);
+    // 1. Fast ipconfig /all via cmd (avoids PowerShell overhead / hang)
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args(["/C", "ipconfig /all"]);
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let output = cmd.output();
-
-    if let Ok(out) = output {
+    if let Ok(out) = cmd.output() {
         if out.status.success() {
             let text = String::from_utf8_lossy(&out.stdout);
+            let mut in_dns_section = false;
             for line in text.lines() {
                 let trimmed = line.trim();
-                if !trimmed.is_empty() && !servers.contains(&trimmed.to_string()) {
-                    servers.push(trimmed.to_string());
-                }
-            }
-        }
-    }
-
-    // 2. Fallback: ipconfig /all
-    if servers.is_empty() {
-        let mut cmd = std::process::Command::new("cmd");
-        cmd.args(["/C", "ipconfig /all"]);
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        if let Ok(out) = cmd.output() {
-            if out.status.success() {
-                let text = String::from_utf8_lossy(&out.stdout);
-                let mut in_dns_section = false;
-                for line in text.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with("DNS Servers") || trimmed.starts_with("DNS 服务器") {
-                        if let Some((_, val)) = trimmed.split_once(':') {
-                            let ip = val.trim();
-                            if !ip.is_empty() && !servers.contains(&ip.to_string()) {
-                                servers.push(ip.to_string());
-                            }
+                if trimmed.starts_with("DNS Servers") || trimmed.starts_with("DNS 服务器") {
+                    if let Some((_, val)) = trimmed.split_once(':') {
+                        let ip = val.trim();
+                        if !ip.is_empty() && !servers.contains(&ip.to_string()) {
+                            servers.push(ip.to_string());
                         }
-                        in_dns_section = true;
-                    } else if in_dns_section {
-                        if trimmed.is_empty() || trimmed.contains(':') {
-                            in_dns_section = false;
-                        } else {
-                            let ip = trimmed.trim();
-                            if !ip.is_empty() && !servers.contains(&ip.to_string()) {
-                                servers.push(ip.to_string());
-                            }
+                    }
+                    in_dns_section = true;
+                } else if in_dns_section {
+                    if trimmed.is_empty() || trimmed.contains(':') {
+                        in_dns_section = false;
+                    } else {
+                        let ip = trimmed.trim();
+                        if !ip.is_empty() && !servers.contains(&ip.to_string()) {
+                            servers.push(ip.to_string());
                         }
                     }
                 }

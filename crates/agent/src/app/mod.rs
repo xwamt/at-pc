@@ -164,6 +164,79 @@ impl AgentAppState {
             "STOPPED",
         );
     }
+
+    /// Resets stopped status and reconnects the client to the server.
+    pub fn trigger_reconnect(&self) {
+        self.set_stopped(false);
+        self.set_status(ClientConnectionStatus::Connecting);
+
+        let ws_client_opt = self.ws_client.read().unwrap().clone();
+        if let Some(client) = ws_client_opt {
+            client.reset_running();
+            if tokio::runtime::Handle::try_current().is_ok() {
+                tokio::spawn(async move {
+                    client.run().await;
+                });
+            }
+        }
+
+        self.add_audit_log(
+            "agent_reconnect",
+            "Reconnection triggered by user in Agent UI",
+            "STARTED",
+        );
+    }
+
+    /// Updates target server URL, optionally writes configuration to disk, and triggers reconnect.
+    pub fn update_server_url(&self, new_url: String, persist: bool) -> Result<(), String> {
+        let trimmed = new_url.trim().to_string();
+        if trimmed.is_empty() {
+            return Err("Server URL cannot be empty".to_string());
+        }
+
+        // Validate URL format
+        if !trimmed.starts_with("ws://") && !trimmed.starts_with("wss://") {
+            return Err("Server URL must start with 'ws://' or 'wss://'".to_string());
+        }
+
+        crate::ws_client::parse_ws_url(&trimmed)
+            .map_err(|e| format!("Invalid WebSocket URL: {}", e))?;
+
+        // 1. Update in-memory server URL
+        self.set_server_url(trimmed.clone());
+
+        // 2. Optionally persist to disk
+        if persist {
+            if let Err(e) = AgentConfig::save_server_url(&trimmed, None) {
+                tracing::warn!("Failed to persist server URL to config file: {}", e);
+            }
+        }
+
+        // 3. Update client and trigger reconnect
+        let ws_client_opt = self.ws_client.read().unwrap().clone();
+        if let Some(client) = ws_client_opt {
+            self.set_stopped(false);
+            self.set_status(ClientConnectionStatus::Connecting);
+
+            let url_clone = trimmed.clone();
+            if tokio::runtime::Handle::try_current().is_ok() {
+                tokio::spawn(async move {
+                    client.set_server_url(url_clone).await;
+                    client.reset_running();
+                    client.abort_active_session().await;
+                    client.run().await;
+                });
+            }
+        }
+
+        self.add_audit_log(
+            "server_url_updated",
+            &format!("Server URL updated to: {}", trimmed),
+            "UPDATED",
+        );
+
+        Ok(())
+    }
 }
 
 impl AgentEventListener for AgentAppState {

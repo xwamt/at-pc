@@ -52,6 +52,13 @@ fn test_agent_app_state_emergency_disconnect() {
 
     let logs = state.get_audit_logs();
     assert!(logs.iter().any(|l| l.tool_name == "emergency_disconnect"));
+
+    // Reconnect
+    state.trigger_reconnect();
+    assert!(!state.is_stopped());
+    assert_eq!(state.status(), ClientConnectionStatus::Connecting);
+    let logs_after = state.get_audit_logs();
+    assert!(logs_after.iter().any(|l| l.tool_name == "agent_reconnect"));
 }
 
 #[test]
@@ -76,4 +83,24 @@ fn test_agent_app_state_terminal_info() {
     info.hostname = "Updated-PC".to_string();
     state.set_terminal_info(info);
     assert_eq!(state.get_terminal_info().hostname, "Updated-PC");
+}
+
+#[tokio::test]
+async fn test_agent_app_state_update_server_url() {
+    let state = Arc::new(AgentAppState::new("ws://127.0.0.1:9801/ws".to_string()));
+
+    // 1. Invalid URLs rejected
+    assert!(state.update_server_url("".to_string(), false).is_err());
+    assert!(state.update_server_url("http://127.0.0.1:9801".to_string(), false).is_err());
+    assert!(state.update_server_url("ftp://127.0.0.1".to_string(), false).is_err());
+    assert_eq!(state.server_url(), "ws://127.0.0.1:9801/ws");
+
+    // 2. Valid URL accepted
+    let new_url = "ws://192.168.1.88:9801/ws".to_string();
+    assert!(state.update_server_url(new_url.clone(), false).is_ok());
+    assert_eq!(state.server_url(), "ws://192.168.1.88:9801/ws");
+
+    // 3. Audit log contains update event
+    let logs = state.get_audit_logs();
+    assert!(logs.iter().any(|l| l.tool_name == "server_url_updated"));
 }

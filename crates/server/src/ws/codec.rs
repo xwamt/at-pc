@@ -11,7 +11,7 @@ pub fn compute_accept_key(sec_websocket_key: &str) -> String {
     BASE64_STANDARD.encode(hash.as_ref())
 }
 
-/// WebSocket protocol message
+/// WebSocket protocol message representation
 #[derive(Debug, Clone, PartialEq)]
 pub enum WsMessage {
     Text(String),
@@ -21,7 +21,32 @@ pub enum WsMessage {
     Close,
 }
 
-/// WebSocket reader half
+impl From<tokio_tungstenite::tungstenite::Message> for WsMessage {
+    fn from(m: tokio_tungstenite::tungstenite::Message) -> Self {
+        match m {
+            tokio_tungstenite::tungstenite::Message::Text(t) => WsMessage::Text(t.to_string()),
+            tokio_tungstenite::tungstenite::Message::Binary(b) => WsMessage::Binary(b.to_vec()),
+            tokio_tungstenite::tungstenite::Message::Ping(p) => WsMessage::Ping(p.to_vec()),
+            tokio_tungstenite::tungstenite::Message::Pong(p) => WsMessage::Pong(p.to_vec()),
+            tokio_tungstenite::tungstenite::Message::Close(_) => WsMessage::Close,
+            tokio_tungstenite::tungstenite::Message::Frame(_) => WsMessage::Close,
+        }
+    }
+}
+
+impl From<WsMessage> for tokio_tungstenite::tungstenite::Message {
+    fn from(m: WsMessage) -> Self {
+        match m {
+            WsMessage::Text(t) => tokio_tungstenite::tungstenite::Message::Text(t),
+            WsMessage::Binary(b) => tokio_tungstenite::tungstenite::Message::Binary(b),
+            WsMessage::Ping(p) => tokio_tungstenite::tungstenite::Message::Ping(p),
+            WsMessage::Pong(p) => tokio_tungstenite::tungstenite::Message::Pong(p),
+            WsMessage::Close => tokio_tungstenite::tungstenite::Message::Close(None),
+        }
+    }
+}
+
+/// WebSocket reader half supporting both masked and unmasked RFC 6455 frames
 pub struct WsReader<R> {
     reader: R,
 }
@@ -86,14 +111,27 @@ impl<R: AsyncRead + Unpin> WsReader<R> {
     }
 }
 
-/// WebSocket writer half
+/// WebSocket writer half supporting RFC 6455 masked and unmasked frames
 pub struct WsWriter<W> {
     writer: W,
+    masked: bool,
 }
 
 impl<W: AsyncWrite + Unpin> WsWriter<W> {
+    /// Creates a writer that applies RFC 6455 client masking
     pub fn new(writer: W) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            masked: true,
+        }
+    }
+
+    /// Creates a writer that does not apply masking (standard for server-to-client frames)
+    pub fn unmasked(writer: W) -> Self {
+        Self {
+            writer,
+            masked: false,
+        }
     }
 
     /// Write a WebSocket frame to the stream
@@ -106,24 +144,51 @@ impl<W: AsyncWrite + Unpin> WsWriter<W> {
             WsMessage::Close => (0x8, &[][..]),
         };
 
-        let mut header = Vec::with_capacity(10);
+        let mut header = Vec::with_capacity(14);
         header.push(0x80 | opcode); // FIN + opcode
 
         let len = payload.len();
+        let mask_bit = if self.masked { 0x80 } else { 0x00 };
+
         if len < 126 {
-            header.push(len as u8);
+            header.push(mask_bit | (len as u8));
         } else if len <= 0xFFFF {
-            header.push(126);
+            header.push(mask_bit | 126);
             header.extend_from_slice(&(len as u16).to_be_bytes());
         } else {
-            header.push(127);
+            header.push(mask_bit | 127);
             header.extend_from_slice(&(len as u64).to_be_bytes());
         }
 
-        self.writer.write_all(&header).await?;
-        if !payload.is_empty() {
-            self.writer.write_all(payload).await?;
+        if self.masked {
+            // Generate pseudo-random mask bytes
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let mask_bytes = [
+                (now & 0xFF) as u8,
+                ((now >> 8) & 0xFF) as u8 ^ 0x5A,
+                ((now >> 16) & 0xFF) as u8 ^ 0xA5,
+                ((now >> 24) & 0xFF) as u8 ^ 0x3C,
+            ];
+            header.extend_from_slice(&mask_bytes);
+            self.writer.write_all(&header).await?;
+
+            if !payload.is_empty() {
+                let mut masked_payload = payload.to_vec();
+                for (i, byte) in masked_payload.iter_mut().enumerate() {
+                    *byte ^= mask_bytes[i % 4];
+                }
+                self.writer.write_all(&masked_payload).await?;
+            }
+        } else {
+            self.writer.write_all(&header).await?;
+            if !payload.is_empty() {
+                self.writer.write_all(payload).await?;
+            }
         }
+
         self.writer.flush().await?;
         Ok(())
     }

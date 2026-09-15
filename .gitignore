@@ -1,3 +1,11 @@
 target/
 dist/
 .DS_Store
+*.log
+*.jpg
+*.jpeg
+*.png
+!media/*.png
+audit.jsonl
+terminals_meta.json
+scratch/

@@ -3,18 +3,78 @@
 use crate::app::AgentAppState;
 use crate::ws_client::ClientConnectionStatus;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Main application window for at-pc terminal agent.
 pub struct AgentApp {
     pub state: Arc<AgentAppState>,
+    pub server_url_input: String,
+    pub is_editing_server: bool,
+    pub feedback_msg: Option<(String, bool)>,
+    pub copied_id_timer: Option<Instant>,
+    pub filter_failed_only: bool,
 }
 
 impl AgentApp {
     /// Creates a new `AgentApp` instance.
     pub fn new(state: Arc<AgentAppState>) -> Self {
-        Self { state }
+        let initial_url = state.server_url();
+        Self {
+            state,
+            server_url_input: initial_url,
+            is_editing_server: false,
+            feedback_msg: None,
+            copied_id_timer: None,
+            filter_failed_only: false,
+        }
     }
+}
+
+/// Applies the Obsidian Cyber-Ops modern dark design tokens to egui context.
+pub fn setup_modern_theme(ctx: &egui::Context) {
+    let mut visuals = egui::Visuals::dark();
+
+    // Base background colors
+    visuals.override_text_color = Some(egui::Color32::from_rgb(241, 245, 249)); // #f1f5f9
+    visuals.panel_fill = egui::Color32::from_rgb(11, 15, 25); // Obsidian deep dark #0b0f19
+    visuals.window_fill = egui::Color32::from_rgb(17, 22, 34); // #111622
+    visuals.extreme_bg_color = egui::Color32::from_rgb(8, 12, 20); // #080c14
+
+    let rounding = egui::Rounding::same(7.0);
+
+    // Non-interactive surfaces (cards, panels)
+    visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(21, 28, 44); // Card surface #151c2c
+    visuals.widgets.noninteractive.bg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(39, 53, 79)); // Subtle border #27354f
+    visuals.widgets.noninteractive.rounding = egui::Rounding::same(8.0);
+
+    // Inactive button/inputs
+    visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(26, 35, 54);
+    visuals.widgets.inactive.bg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 62, 92));
+    visuals.widgets.inactive.rounding = rounding;
+    visuals.widgets.inactive.fg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(226, 232, 240));
+
+    // Hovered button/inputs (Neon Cyan highlight)
+    visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(33, 45, 71);
+    visuals.widgets.hovered.bg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(56, 189, 248));
+    visuals.widgets.hovered.rounding = rounding;
+    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+
+    // Active button/inputs
+    visuals.widgets.active.bg_fill = egui::Color32::from_rgb(14, 116, 144);
+    visuals.widgets.active.bg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(56, 189, 248));
+    visuals.widgets.active.rounding = rounding;
+    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+
+    // Selection highlight
+    visuals.selection.bg_fill = egui::Color32::from_rgb(14, 116, 144);
+    visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(56, 189, 248));
+
+    ctx.set_visuals(visuals);
 }
 
 /// Configures custom / system CJK fonts for Chinese character rendering.
@@ -70,264 +130,517 @@ impl eframe::App for AgentApp {
         let logs = self.state.get_audit_logs();
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 9.0);
 
-            // Header Section
+            // 1. Header Section
             ui.horizontal(|ui| {
-                ui.heading("💻 at-pc 终端代理");
-            });
-            ui.label(
-                egui::RichText::new(format!(
-                    "Terminal Agent C/S Edition (v{})",
-                    env!("CARGO_PKG_VERSION")
-                ))
-                .weak()
-                .size(11.0),
-            );
-
-            ui.add_space(4.0);
-
-            // Status Badge
-            let (status_text, status_color) = if is_stopped {
-                (
-                    "🔴 代理已停止 (Agent Stopped / Disconnected)".to_string(),
-                    egui::Color32::from_rgb(220, 60, 60),
-                )
-            } else {
-                match status {
-                    ClientConnectionStatus::Connected => (
-                        format!("🟢 已连接到服务器 [{}]", server_url),
-                        egui::Color32::from_rgb(40, 180, 80),
-                    ),
-                    ClientConnectionStatus::Connecting => (
-                        format!("🟡 正在连接服务器 [{}]...", server_url),
-                        egui::Color32::from_rgb(240, 180, 50),
-                    ),
-                    ClientConnectionStatus::Reconnecting => (
-                        format!("🟡 重新连接服务器 [{}] 中...", server_url),
-                        egui::Color32::from_rgb(240, 180, 50),
-                    ),
-                    ClientConnectionStatus::Disconnected => (
-                        "🔴 未连接服务器 (Disconnected)".to_string(),
-                        egui::Color32::from_rgb(220, 60, 60),
-                    ),
-                }
-            };
-
-            egui::Frame::group(ui.style())
-                .fill(egui::Color32::from_black_alpha(25))
-                .inner_margin(egui::Margin::symmetric(10.0, 8.0))
-                .rounding(6.0)
-                .show(ui, |ui| {
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new("💻")
+                        .size(20.0),
+                );
+                ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(status_text)
-                                .color(status_color)
+                            egui::RichText::new("at-pc 终端代理")
                                 .strong()
-                                .size(13.0),
+                                .size(16.0)
+                                .color(egui::Color32::from_rgb(241, 245, 249)),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(56, 189, 248)),
                         );
                     });
-                });
-
-            ui.add_space(4.0);
-
-            // Info Card: Terminal Metadata
-            egui::Frame::group(ui.style())
-                .inner_margin(egui::Margin::same(10.0))
-                .rounding(8.0)
-                .show(ui, |ui| {
-                    egui::Grid::new("terminal_metadata_grid")
-                        .num_columns(2)
-                        .spacing([16.0, 6.0])
-                        .show(ui, |ui| {
-                            ui.label(egui::RichText::new("终端标识 (Terminal ID):").strong());
-                            ui.label(
-                                egui::RichText::new(&terminal_info.terminal_id)
-                                    .monospace()
-                                    .strong()
-                                    .size(13.0)
-                                    .color(egui::Color32::from_rgb(255, 175, 50)),
-                            );
-                            ui.end_row();
-
-                            ui.label(egui::RichText::new("主机名称 (Hostname):").strong());
-                            ui.label(
-                                egui::RichText::new(&terminal_info.hostname)
-                                    .monospace()
-                                    .size(12.0),
-                            );
-                            ui.end_row();
-
-                            ui.label(egui::RichText::new("局域网 IP (LAN IP):").strong());
-                            ui.label(
-                                egui::RichText::new(&terminal_info.lan_ip)
-                                    .monospace()
-                                    .size(12.0),
-                            );
-                            ui.end_row();
-
-                            ui.label(egui::RichText::new("操作系统 (OS Version):").strong());
-                            ui.label(
-                                egui::RichText::new(&terminal_info.os_version)
-                                    .size(12.0),
-                            );
-                            ui.end_row();
-
-                            ui.label(egui::RichText::new("服务器地址 (Server URL):").strong());
-                            ui.label(
-                                egui::RichText::new(&server_url)
-                                    .monospace()
-                                    .size(12.0),
-                            );
-                            ui.end_row();
-                        });
-                });
-
-            ui.add_space(6.0);
-            ui.separator();
-
-            // Real-Time Audit Log Header
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("📜 实时工具调用审计 (Tool Execution Audit)").strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new(format!("共 {} 条记录", logs.len()))
+                        egui::RichText::new("LAN PC Diagnostics & Assistance Client · Obsidian Edition")
                             .weak()
-                            .size(11.0),
+                            .size(10.0),
                     );
                 });
             });
 
-            // Scrollable Audit Log Box
-            egui::Frame::group(ui.style())
-                .fill(egui::Color32::from_black_alpha(40))
-                .inner_margin(egui::Margin::same(8.0))
-                .rounding(6.0)
+            ui.add_space(2.0);
+
+            // 2. Dynamic Status Banner
+            let (status_icon, status_title, status_sub, banner_bg, border_color, text_color) = if is_stopped {
+                (
+                    "🔴",
+                    "代理已切断连接 (Agent Stopped)",
+                    "所有远程控制指令已被拦截并停止",
+                    egui::Color32::from_rgba_premultiplied(127, 29, 29, 65),
+                    egui::Color32::from_rgb(239, 68, 68),
+                    egui::Color32::from_rgb(254, 202, 202),
+                )
+            } else {
+                match status {
+                    ClientConnectionStatus::Connected => (
+                        "🟢",
+                        "已连接中央控制网关",
+                        "实时链路就绪，等待运维指令",
+                        egui::Color32::from_rgba_premultiplied(6, 78, 59, 65),
+                        egui::Color32::from_rgb(16, 185, 129),
+                        egui::Color32::from_rgb(167, 243, 208),
+                    ),
+                    ClientConnectionStatus::Connecting => (
+                        "🟡",
+                        "正在连接中央网关...",
+                        "尝试建立安全握手通道",
+                        egui::Color32::from_rgba_premultiplied(120, 53, 15, 65),
+                        egui::Color32::from_rgb(245, 158, 11),
+                        egui::Color32::from_rgb(253, 230, 138),
+                    ),
+                    ClientConnectionStatus::Reconnecting => (
+                        "🟡",
+                        "重新连接中央网关中...",
+                        "网络波动，正在按指数退避策略重试",
+                        egui::Color32::from_rgba_premultiplied(120, 53, 15, 65),
+                        egui::Color32::from_rgb(245, 158, 11),
+                        egui::Color32::from_rgb(253, 230, 138),
+                    ),
+                    ClientConnectionStatus::Disconnected => (
+                        "⚪",
+                        "未连接到网关 (Disconnected)",
+                        "请检查网关地址或网络连通性",
+                        egui::Color32::from_rgba_premultiplied(51, 65, 85, 65),
+                        egui::Color32::from_rgb(100, 116, 139),
+                        egui::Color32::from_rgb(203, 213, 225),
+                    ),
+                }
+            };
+
+            egui::Frame::none()
+                .fill(banner_bg)
+                .stroke(egui::Stroke::new(1.0, border_color))
+                .inner_margin(egui::Margin::symmetric(12.0, 7.0))
+                .rounding(8.0)
                 .show(ui, |ui| {
-                    let max_scroll_height = (ui.available_height() - 55.0).max(120.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(status_icon).size(13.0));
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new(status_title)
+                                    .color(text_color)
+                                    .strong()
+                                    .size(12.0),
+                            );
+                            ui.label(
+                                egui::RichText::new(status_sub)
+                                    .color(egui::Color32::from_rgb(148, 163, 184))
+                                    .size(10.0),
+                            );
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let ping_tag = if status == ClientConnectionStatus::Connected && !is_stopped {
+                                "● 正常"
+                            } else {
+                                "○ 待命"
+                            };
+                            ui.label(
+                                egui::RichText::new(ping_tag)
+                                    .color(text_color)
+                                    .size(10.0)
+                                    .monospace(),
+                            );
+                        });
+                    });
+                });
+
+            ui.add_space(2.0);
+
+            // 3. Info Card: Terminal Metadata
+            egui::Frame::none()
+                .fill(egui::Color32::from_rgb(21, 28, 44))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(39, 53, 79)))
+                .inner_margin(egui::Margin::same(11.0))
+                .rounding(9.0)
+                .show(ui, |ui| {
+                    // Card Header with 1-Click Copy
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("🖥️ 本机终端:")
+                                .color(egui::Color32::from_rgb(148, 163, 184))
+                                .size(12.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(&terminal_info.terminal_id)
+                                .monospace()
+                                .strong()
+                                .size(13.0)
+                                .color(egui::Color32::from_rgb(245, 158, 11)), // Amber accent
+                        );
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let is_copied = self
+                                .copied_id_timer
+                                .map(|t| t.elapsed() < Duration::from_millis(1500))
+                                .unwrap_or(false);
+
+                            let copy_btn_text = if is_copied {
+                                egui::RichText::new("✓ 已复制")
+                                    .color(egui::Color32::from_rgb(52, 211, 153))
+                                    .size(11.0)
+                                    .strong()
+                            } else {
+                                egui::RichText::new("📋 复制 ID")
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgb(203, 213, 225))
+                            };
+
+                            if ui.button(copy_btn_text).clicked() {
+                                ctx.output_mut(|o| o.copied_text = terminal_info.terminal_id.clone());
+                                self.copied_id_timer = Some(Instant::now());
+                            }
+                        });
+                    });
+
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+
+                    // Grid details
+                    egui::Grid::new("terminal_metadata_grid_obsidian")
+                        .num_columns(2)
+                        .spacing([18.0, 7.0])
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("主机名称:").color(egui::Color32::from_rgb(148, 163, 184)).size(11.0));
+                            ui.label(
+                                egui::RichText::new(&terminal_info.hostname)
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgb(241, 245, 249)),
+                            );
+                            ui.end_row();
+
+                            ui.label(egui::RichText::new("局域网 IP:").color(egui::Color32::from_rgb(148, 163, 184)).size(11.0));
+                            ui.label(
+                                egui::RichText::new(&terminal_info.lan_ip)
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgb(56, 189, 248)), // Cyan
+                            );
+                            ui.end_row();
+
+                            ui.label(egui::RichText::new("操作系统:").color(egui::Color32::from_rgb(148, 163, 184)).size(11.0));
+                            ui.label(
+                                egui::RichText::new(&terminal_info.os_version)
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgb(226, 232, 240)),
+                            );
+                            ui.end_row();
+
+                            ui.label(egui::RichText::new("网关地址:").color(egui::Color32::from_rgb(148, 163, 184)).size(11.0));
+                            ui.horizontal(|ui| {
+                                if !self.is_editing_server {
+                                    ui.label(
+                                        egui::RichText::new(&server_url)
+                                            .monospace()
+                                            .size(11.0)
+                                            .color(egui::Color32::from_rgb(148, 163, 184)),
+                                    );
+                                    if ui.button(egui::RichText::new("✏️ 修改").size(10.0)).clicked() {
+                                        self.is_editing_server = true;
+                                        self.server_url_input = server_url.clone();
+                                        self.feedback_msg = None;
+                                    }
+                                } else {
+                                    let edit_resp = ui.add(
+                                        egui::TextEdit::singleline(&mut self.server_url_input)
+                                            .desired_width(160.0)
+                                            .font(egui::TextStyle::Monospace),
+                                    );
+                                    if edit_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                        match self.state.update_server_url(self.server_url_input.clone(), true) {
+                                            Ok(_) => {
+                                                self.is_editing_server = false;
+                                                self.feedback_msg = Some(("配置已生效并重连中...".to_string(), false));
+                                            }
+                                            Err(e) => {
+                                                self.feedback_msg = Some((e, true));
+                                            }
+                                        }
+                                    }
+
+                                    if ui
+                                        .button(egui::RichText::new("💾 保存").color(egui::Color32::from_rgb(52, 211, 153)).size(10.0))
+                                        .clicked()
+                                    {
+                                        match self.state.update_server_url(self.server_url_input.clone(), true) {
+                                            Ok(_) => {
+                                                self.is_editing_server = false;
+                                                self.feedback_msg = Some(("配置已保存并立即生效".to_string(), false));
+                                            }
+                                            Err(e) => {
+                                                self.feedback_msg = Some((e, true));
+                                            }
+                                        }
+                                    }
+
+                                    if ui.button(egui::RichText::new("❌").size(10.0)).clicked() {
+                                        self.is_editing_server = false;
+                                        self.server_url_input = server_url.clone();
+                                        self.feedback_msg = None;
+                                    }
+                                }
+                            });
+                            ui.end_row();
+                        });
+
+                    if let Some((ref msg, is_err)) = self.feedback_msg {
+                        let color = if is_err {
+                            egui::Color32::from_rgb(244, 63, 94)
+                        } else {
+                            egui::Color32::from_rgb(52, 211, 153)
+                        };
+                        ui.add_space(3.0);
+                        ui.label(egui::RichText::new(msg).color(color).size(11.0));
+                    }
+                });
+
+            ui.add_space(3.0);
+
+            // 4. Real-Time Audit Log Header & Action Bar
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("📜 实时指令审计流")
+                        .strong()
+                        .size(12.0)
+                        .color(egui::Color32::from_rgb(226, 232, 240)),
+                );
+
+                let display_logs: Vec<_> = if self.filter_failed_only {
+                    logs.iter().filter(|l| l.status == "FAILED" || l.status == "STOPPED").cloned().collect()
+                } else {
+                    logs.clone()
+                };
+
+                ui.label(
+                    egui::RichText::new(format!("({} 条)", display_logs.len()))
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(148, 163, 184)),
+                );
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(egui::RichText::new("🗑 清空").size(10.0)).clicked() {
+                        self.state.clear_audit_logs();
+                    }
+
+                    let filter_label = if self.filter_failed_only {
+                        egui::RichText::new("仅异常 [开]").color(egui::Color32::from_rgb(251, 113, 133)).size(10.0)
+                    } else {
+                        egui::RichText::new("过滤异常").size(10.0)
+                    };
+                    if ui.button(filter_label).clicked() {
+                        self.filter_failed_only = !self.filter_failed_only;
+                    }
+                });
+            });
+
+            // 5. Scrollable Audit Log Box
+            let display_logs: Vec<_> = if self.filter_failed_only {
+                logs.iter().filter(|l| l.status == "FAILED" || l.status == "STOPPED").cloned().collect()
+            } else {
+                logs.clone()
+            };
+
+            egui::Frame::none()
+                .fill(egui::Color32::from_rgb(12, 17, 28))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(30, 41, 59)))
+                .inner_margin(egui::Margin::same(7.0))
+                .rounding(8.0)
+                .show(ui, |ui| {
+                    let max_scroll_height = (ui.available_height() - 60.0).max(110.0);
                     egui::ScrollArea::vertical()
                         .max_height(max_scroll_height)
                         .auto_shrink([false, false])
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
-                            if logs.is_empty() {
-                                ui.add_space(20.0);
+                            if display_logs.is_empty() {
+                                ui.add_space(24.0);
                                 ui.centered_and_justified(|ui| {
                                     ui.label(
                                         egui::RichText::new(
-                                            "暂无工具调用记录，等待中央服务器派发任务...",
+                                            "暂无匹配的工具调用审计记录 · 等待中央服务器派发任务...",
                                         )
-                                        .weak(),
+                                        .color(egui::Color32::from_rgb(100, 116, 139))
+                                        .size(11.0),
                                     );
                                 });
-                                ui.add_space(20.0);
+                                ui.add_space(24.0);
                             } else {
-                                for entry in &logs {
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(format!("[{}]", entry.timestamp))
-                                                .weak()
-                                                .monospace()
-                                                .size(11.0),
-                                        );
+                                for entry in &display_logs {
+                                    let (status_text, bg_col, border_col, fg_col) = match entry.status.as_str() {
+                                        "SUCCESS" => (
+                                            "✓ 成功",
+                                            egui::Color32::from_rgba_premultiplied(16, 185, 129, 30),
+                                            egui::Color32::from_rgb(16, 185, 129),
+                                            egui::Color32::from_rgb(52, 211, 153),
+                                        ),
+                                        "STARTED" => (
+                                            "▶ 进行中",
+                                            egui::Color32::from_rgba_premultiplied(56, 189, 248, 30),
+                                            egui::Color32::from_rgb(56, 189, 248),
+                                            egui::Color32::from_rgb(56, 189, 248),
+                                        ),
+                                        "STOPPED" => (
+                                            "⏹ 已终止",
+                                            egui::Color32::from_rgba_premultiplied(245, 158, 11, 30),
+                                            egui::Color32::from_rgb(245, 158, 11),
+                                            egui::Color32::from_rgb(251, 191, 36),
+                                        ),
+                                        "FAILED" => (
+                                            "✗ 失败",
+                                            egui::Color32::from_rgba_premultiplied(244, 63, 94, 30),
+                                            egui::Color32::from_rgb(244, 63, 94),
+                                            egui::Color32::from_rgb(251, 113, 133),
+                                        ),
+                                        _ => (
+                                            entry.status.as_str(),
+                                            egui::Color32::from_rgba_premultiplied(100, 116, 139, 30),
+                                            egui::Color32::from_rgb(100, 116, 139),
+                                            egui::Color32::from_rgb(203, 213, 225),
+                                        ),
+                                    };
 
-                                        let (status_tag, tag_color) = match entry.status.as_str() {
-                                            "SUCCESS" => (
-                                                "✓ SUCCESS",
-                                                egui::Color32::from_rgb(60, 200, 90),
-                                            ),
-                                            "STARTED" => (
-                                                "▶ STARTED",
-                                                egui::Color32::from_rgb(80, 170, 240),
-                                            ),
-                                            "STOPPED" => (
-                                                "⏹ STOPPED",
-                                                egui::Color32::from_rgb(220, 120, 50),
-                                            ),
-                                            "FAILED" => (
-                                                "✗ FAILED",
-                                                egui::Color32::from_rgb(240, 70, 70),
-                                            ),
-                                            _ => (
-                                                entry.status.as_str(),
-                                                egui::Color32::from_rgb(200, 200, 200),
-                                            ),
-                                        };
+                                    egui::Frame::none()
+                                        .fill(egui::Color32::from_rgb(17, 24, 39))
+                                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(30, 41, 59)))
+                                        .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+                                        .rounding(6.0)
+                                        .show(ui, |ui| {
+                                            ui.horizontal_wrapped(|ui| {
+                                                // Timestamp
+                                                ui.label(
+                                                    egui::RichText::new(&entry.timestamp)
+                                                        .color(egui::Color32::from_rgb(100, 116, 139))
+                                                        .monospace()
+                                                        .size(10.0),
+                                                );
 
-                                        ui.label(
-                                            egui::RichText::new(status_tag)
-                                                .color(tag_color)
-                                                .strong()
-                                                .monospace()
-                                                .size(11.0),
-                                        );
+                                                // Status Capsule Chip
+                                                egui::Frame::none()
+                                                    .fill(bg_col)
+                                                    .stroke(egui::Stroke::new(1.0, border_col))
+                                                    .inner_margin(egui::Margin::symmetric(5.0, 1.0))
+                                                    .rounding(4.0)
+                                                    .show(ui, |ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(status_text)
+                                                                .color(fg_col)
+                                                                .strong()
+                                                                .size(9.5),
+                                                        );
+                                                    });
 
-                                        ui.label(
-                                            egui::RichText::new(&entry.tool_name)
-                                                .strong()
-                                                .monospace()
-                                                .size(12.0),
-                                        );
+                                                // Tool Name
+                                                ui.label(
+                                                    egui::RichText::new(&entry.tool_name)
+                                                        .strong()
+                                                        .monospace()
+                                                        .size(11.0)
+                                                        .color(egui::Color32::from_rgb(241, 245, 249)),
+                                                );
 
-                                        if let Some(dur) = entry.duration_ms {
-                                            ui.label(
-                                                egui::RichText::new(format!("({}ms)", dur))
-                                                    .weak()
-                                                    .size(11.0),
-                                            );
-                                        }
+                                                // Duration tag
+                                                if let Some(dur) = entry.duration_ms {
+                                                    ui.label(
+                                                        egui::RichText::new(format!("{}ms", dur))
+                                                            .color(egui::Color32::from_rgb(148, 163, 184))
+                                                            .size(10.0),
+                                                    );
+                                                }
 
-                                        if !entry.summary.is_empty() {
-                                            ui.label(
-                                                egui::RichText::new(format!("- {}", entry.summary))
-                                                    .size(11.0),
-                                            );
-                                        }
-                                    });
+                                                // Summary content
+                                                if !entry.summary.is_empty() {
+                                                    ui.label(
+                                                        egui::RichText::new(format!("- {}", entry.summary))
+                                                            .color(egui::Color32::from_rgb(148, 163, 184))
+                                                            .size(10.5),
+                                                    );
+                                                }
+                                            });
+                                        });
                                     ui.add_space(2.0);
                                 }
                             }
                         });
                 });
 
-            ui.add_space(6.0);
+            ui.add_space(4.0);
 
-            // Emergency Disconnect Section (Footer)
+            // 6. Emergency Action Area (Footer)
             if is_stopped {
-                let disabled_stop_btn = egui::Button::new(
-                    egui::RichText::new("🔴 已断开连接 (Emergency Disconnected)")
-                        .color(egui::Color32::from_rgb(180, 180, 180))
-                        .size(13.0),
-                )
-                .fill(egui::Color32::from_rgb(80, 80, 80))
-                .min_size(egui::vec2(ui.available_width(), 34.0));
-
-                let _ = ui.add_enabled(false, disabled_stop_btn);
-            } else {
-                let disconnect_btn = egui::Button::new(
-                    egui::RichText::new("🔴 立即断开连接 (Emergency Disconnect)")
+                let reconnect_btn = egui::Button::new(
+                    egui::RichText::new("🟢 恢复远程协助连接 (Restart Assistance)")
                         .color(egui::Color32::WHITE)
                         .strong()
-                        .size(13.0),
+                        .size(12.5),
                 )
-                .fill(egui::Color32::from_rgb(200, 40, 40))
+                .fill(egui::Color32::from_rgb(16, 149, 103))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(52, 211, 153)))
+                .min_size(egui::vec2(ui.available_width(), 34.0));
+
+                if ui.add(reconnect_btn).clicked() {
+                    self.state.trigger_reconnect();
+                }
+            } else {
+                let disconnect_btn = egui::Button::new(
+                    egui::RichText::new("🔴 立即切断远程协助 (Emergency Disconnect)")
+                        .color(egui::Color32::WHITE)
+                        .strong()
+                        .size(12.5),
+                )
+                .fill(egui::Color32::from_rgb(190, 24, 93))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(251, 113, 133)))
                 .min_size(egui::vec2(ui.available_width(), 34.0));
 
                 if ui.add_enabled(true, disconnect_btn).clicked() {
                     self.state.trigger_emergency_disconnect();
                 }
             }
+
+            // Safety notice footer
+            ui.add_space(1.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("🔒 审计日志本地留存 · 零外部隐蔽通道 · 遇到异常可随时一键切断")
+                        .weak()
+                        .size(9.5)
+                        .color(egui::Color32::from_rgb(100, 116, 139)),
+                );
+            });
         });
     }
 }
 
+fn load_app_icon() -> Option<egui::IconData> {
+    let png_bytes = include_bytes!("../../../../media/at-pc-icon.png");
+    if let Ok(img) = image::load_from_memory(png_bytes) {
+        let rgba = img.into_rgba8();
+        let (width, height) = rgba.dimensions();
+        return Some(egui::IconData {
+            rgba: rgba.into_raw(),
+            width,
+            height,
+        });
+    }
+    None
+}
+
 /// Runs the native eframe desktop application for Agent.
 pub fn run_agent_app(state: Arc<AgentAppState>) -> eframe::Result<()> {
+    let mut builder = egui::ViewportBuilder::default()
+        .with_inner_size([500.0, 620.0])
+        .with_min_inner_size([420.0, 460.0])
+        .with_title("at-pc 终端代理");
+
+    if let Some(icon) = load_app_icon() {
+        builder = builder.with_icon(icon);
+    }
+
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([500.0, 620.0])
-            .with_min_inner_size([420.0, 460.0])
-            .with_title("at-pc 终端代理"),
+        viewport: builder,
         ..Default::default()
     };
 
@@ -336,6 +649,7 @@ pub fn run_agent_app(state: Arc<AgentAppState>) -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             setup_custom_fonts(&cc.egui_ctx);
+            setup_modern_theme(&cc.egui_ctx);
             Box::new(AgentApp::new(state))
         }),
     )

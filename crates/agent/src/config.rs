@@ -18,12 +18,31 @@ pub struct ServerConfig {
     pub auth_token: Option<String>,
     #[serde(default = "default_reconnect_interval_secs")]
     pub reconnect_interval_secs: u64,
+    /// Optional custom CA certificate path (PEM) for TLS / WSS verification
+    #[serde(default)]
+    pub ca_cert_path: Option<PathBuf>,
+    /// Optional client certificate path (PEM) for mTLS authentication
+    #[serde(default)]
+    pub client_cert_path: Option<PathBuf>,
+    /// Optional client private key path (PEM) for mTLS authentication
+    #[serde(default)]
+    pub client_key_path: Option<PathBuf>,
+    /// Accept self-signed / invalid TLS certs (useful for internal testing)
+    #[serde(default)]
+    pub insecure_skip_verify: bool,
 }
 
 fn default_server_url() -> String {
     std::env::var("AT_PC_SERVER_URL")
         .or_else(|_| std::env::var("DEFAULT_SERVER_URL"))
-        .unwrap_or_else(|_| "ws://127.0.0.1:9801/ws".to_string())
+        .unwrap_or_else(|_| {
+            const COMPILED_URL: Option<&'static str> = option_env!("AT_PC_SERVER_URL");
+            const COMPILED_DEFAULT: Option<&'static str> = option_env!("DEFAULT_SERVER_URL");
+            COMPILED_URL
+                .or(COMPILED_DEFAULT)
+                .unwrap_or("ws://127.0.0.1:9801/ws")
+                .to_string()
+        })
 }
 
 fn default_reconnect_interval_secs() -> u64 {
@@ -36,6 +55,10 @@ impl Default for ServerConfig {
             url: default_server_url(),
             auth_token: std::env::var("AT_PC_AUTH_TOKEN").ok(),
             reconnect_interval_secs: default_reconnect_interval_secs(),
+            ca_cert_path: None,
+            client_cert_path: None,
+            client_key_path: None,
+            insecure_skip_verify: false,
         }
     }
 }
@@ -69,6 +92,9 @@ pub struct AgentConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub device: DeviceConfig,
+    /// Whether Computer-Use (remote simulated mouse and keyboard control) is enabled
+    #[serde(default)]
+    pub enable_computer_use: bool,
 }
 
 impl AgentConfig {
@@ -77,27 +103,128 @@ impl AgentConfig {
         let candidate_paths = if let Some(p) = custom_path {
             vec![p.to_path_buf()]
         } else {
-            let mut paths = vec![PathBuf::from("agent_config.toml")];
+            let mut paths = vec![
+                PathBuf::from("agent_config.toml"),
+                PathBuf::from("config.toml"),
+            ];
             if let Ok(exe_path) = std::env::current_exe() {
                 if let Some(parent) = exe_path.parent() {
                     paths.push(parent.join("agent_config.toml"));
+                    paths.push(parent.join("config.toml"));
                 }
             }
             paths
         };
 
+        let mut config = AgentConfig::default();
+        let mut loaded = false;
         for path in candidate_paths {
             if path.exists() && path.is_file() {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(config) = toml::from_str::<AgentConfig>(&content) {
-                        return config;
+                    if let Ok(parsed) = toml::from_str::<AgentConfig>(&content) {
+                        tracing::info!("Successfully loaded configuration from {:?}", path);
+                        config = parsed;
+                        loaded = true;
+                        break;
                     }
                 }
             }
         }
 
-        AgentConfig::default()
+        if !loaded {
+            tracing::info!(
+                "No valid config file found; using default config (target server: {})",
+                default_server_url()
+            );
+        }
+
+        if let Ok(v) = std::env::var("AT_PC_ENABLE_COMPUTER_USE") {
+            if v == "1" || v.eq_ignore_ascii_case("true") {
+                config.enable_computer_use = true;
+            }
+        }
+        if let Ok(ca) = std::env::var("AT_PC_CA_CERT") {
+            config.server.ca_cert_path = Some(PathBuf::from(ca));
+        }
+        if let Ok(cc) = std::env::var("AT_PC_CLIENT_CERT") {
+            config.server.client_cert_path = Some(PathBuf::from(cc));
+        }
+        if let Ok(ck) = std::env::var("AT_PC_CLIENT_KEY") {
+            config.server.client_key_path = Some(PathBuf::from(ck));
+        }
+        if let Ok(insecure) = std::env::var("AT_PC_INSECURE") {
+            if insecure == "1" || insecure.eq_ignore_ascii_case("true") {
+                config.server.insecure_skip_verify = true;
+            }
+        }
+
+        config
     }
+
+    /// Finds the preferred configuration file path to read from or write to.
+    pub fn find_config_path(custom_path: Option<&Path>) -> PathBuf {
+        if let Some(p) = custom_path {
+            return p.to_path_buf();
+        }
+
+        let candidates = [
+            PathBuf::from("agent_config.toml"),
+            PathBuf::from("config.toml"),
+        ];
+
+        for c in &candidates {
+            if c.exists() && c.is_file() {
+                return c.clone();
+            }
+        }
+
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(parent) = exe_path.parent() {
+                let p1 = parent.join("agent_config.toml");
+                if p1.exists() && p1.is_file() {
+                    return p1;
+                }
+                let p2 = parent.join("config.toml");
+                if p2.exists() && p2.is_file() {
+                    return p2;
+                }
+                return p1;
+            }
+        }
+
+        PathBuf::from("agent_config.toml")
+    }
+
+    /// Updates the server URL and writes the configuration to disk.
+    pub fn save_server_url(new_url: &str, custom_path: Option<&Path>) -> Result<PathBuf, String> {
+        let path = Self::find_config_path(custom_path);
+        let mut config = if path.exists() && path.is_file() {
+            std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|content| toml::from_str::<AgentConfig>(&content).ok())
+                .unwrap_or_default()
+        } else {
+            AgentConfig::default()
+        };
+
+        config.server.url = new_url.trim().to_string();
+
+        let toml_str = toml::to_string_pretty(&config)
+            .map_err(|e| format!("Failed to serialize config to TOML: {}", e))?;
+
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+
+        std::fs::write(&path, toml_str)
+            .map_err(|e| format!("Failed to write config file to {:?}: {}", path, e))?;
+
+        tracing::info!("Saved updated server URL '{}' to {:?}", new_url, path);
+        Ok(path)
+    }
+
 
     /// Resolves the effective device ID (either configured explicitly or generated deterministically from hostname + MAC).
     pub fn resolve_device_id(&self) -> String {
@@ -119,7 +246,7 @@ impl AgentConfig {
         // Extract first valid MAC address deterministically by sorting network interface names
         let networks = Networks::new_with_refreshed_list();
         let mut iface_list: Vec<(&String, &sysinfo::NetworkData)> = networks.iter().collect();
-        iface_list.sort_by(|(a, _), (b, _)| a.cmp(b));
+        iface_list.sort_by_key(|(a, _)| *a);
 
         let mut mac_opt = None;
         for (_name, data) in iface_list {
@@ -205,5 +332,20 @@ mod tests {
         let mut config = AgentConfig::default();
         config.device.device_id = "custom-agent-99".to_string();
         assert_eq!(config.resolve_device_id(), "custom-agent-99");
+    }
+
+    #[test]
+    fn test_save_server_url() {
+        let temp_dir = std::env::temp_dir().join(format!("at_agent_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let config_path = temp_dir.join("test_config.toml");
+
+        let res = AgentConfig::save_server_url("ws://10.10.10.10:9801/ws", Some(&config_path));
+        assert!(res.is_ok());
+
+        let loaded = AgentConfig::load_from_file_or_default(Some(&config_path));
+        assert_eq!(loaded.server.url, "ws://10.10.10.10:9801/ws");
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }
