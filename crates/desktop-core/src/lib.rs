@@ -173,7 +173,7 @@ pub fn compute_sample_hash(raw_rgba: &[u8]) -> u64 {
 }
 
 /// Idle desktop streams send a lightweight (non-JPEG) keepalive at this interval.
-pub const STREAM_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+pub const STREAM_KEEPALIVE_INTERVAL: Duration = Duration::from_millis(500);
 
 /// What the stream loop should do with a captured frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,14 +335,14 @@ mod tests {
     }
 
     #[test]
-    fn idle_keepalive_skips_jpeg_and_fires_at_five_seconds() {
+    fn idle_keepalive_skips_jpeg_and_fires_at_interval() {
         let keepalive = STREAM_KEEPALIVE_INTERVAL;
         assert_eq!(
             decide_frame_send(true, Duration::ZERO, keepalive),
             FrameSendDecision::Encode
         );
         assert_eq!(
-            decide_frame_send(false, Duration::from_millis(4999), keepalive),
+            decide_frame_send(false, Duration::from_millis(499), keepalive),
             FrameSendDecision::Skip
         );
         assert_eq!(
@@ -353,7 +353,7 @@ mod tests {
             decide_frame_send(true, keepalive, keepalive),
             FrameSendDecision::Encode
         );
-        assert!(!should_send_frame(1, 1, Duration::from_secs(1), keepalive));
+        assert!(!should_send_frame(1, 1, Duration::from_millis(250), keepalive));
     }
 
     fn solid_rgba(width: u32, height: u32, pixel: [u8; 4]) -> (Vec<u8>, u32, u32) {

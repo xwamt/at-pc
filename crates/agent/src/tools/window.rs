@@ -4,9 +4,9 @@
 //! focus/activation (`focus_window`), and graceful termination (`close_window`),
 //! as well as action review loop state diff detection (`StateDiff`).
 
-use std::sync::Mutex;
 use at_pc_protocol::models::{StateDiff, WindowInfo};
 use serde_json::{json, Value};
+use std::sync::Mutex;
 use sysinfo::{Pid, System};
 
 /// Snapshot of the active foreground window state
@@ -72,14 +72,16 @@ pub async fn review_action_loop(
         if let (Some(before), Some(after)) = (before_state, after_state) {
             if let Some(diff) = compute_state_diff(&before, &after) {
                 if let Some(obj) = val.as_object_mut() {
-                    obj.insert("state_diff".to_string(), serde_json::to_value(diff).unwrap());
+                    obj.insert(
+                        "state_diff".to_string(),
+                        serde_json::to_value(diff).unwrap(),
+                    );
                 }
             }
         }
     }
     result
 }
-
 
 /// Captures snapshot of the currently active foreground window
 pub fn capture_active_window_state() -> Option<WindowState> {
@@ -102,7 +104,10 @@ pub fn capture_active_window_state() -> Option<WindowState> {
 pub fn list_windows(only_visible: bool) -> Result<Vec<WindowInfo>, String> {
     let mut windows: Vec<WindowInfo> = if let Some(ref mock) = *MOCK_WINDOWS.lock().unwrap() {
         if only_visible {
-            mock.iter().filter(|w| !w.is_minimized && !w.title.trim().is_empty()).cloned().collect()
+            mock.iter()
+                .filter(|w| !w.is_minimized && !w.title.trim().is_empty())
+                .cloned()
+                .collect()
         } else {
             mock.clone()
         }
@@ -122,9 +127,15 @@ pub fn list_windows(only_visible: bool) -> Result<Vec<WindowInfo>, String> {
         if win.display_index.is_none() && !monitors.is_empty() {
             let cx = win.rect[0] + win.rect[2] / 2;
             let cy = win.rect[1] + win.rect[3] / 2;
-            win.display_index = monitors.iter().find(|mon| {
-                cx >= mon.x && cx < mon.x + mon.width as i32 && cy >= mon.y && cy < mon.y + mon.height as i32
-            }).map(|mon| mon.display_index);
+            win.display_index = monitors
+                .iter()
+                .find(|mon| {
+                    cx >= mon.x
+                        && cx < mon.x + mon.width as i32
+                        && cy >= mon.y
+                        && cy < mon.y + mon.height as i32
+                })
+                .map(|mon| mon.display_index);
         }
     }
 
@@ -138,20 +149,28 @@ pub fn focus_window(
     hwnd: Option<usize>,
 ) -> Result<Value, String> {
     if title.is_none() && pid.is_none() && hwnd.is_none() {
-        return Err("At least one parameter of 'title', 'pid', or 'hwnd' must be specified".to_string());
+        return Err(
+            "At least one parameter of 'title', 'pid', or 'hwnd' must be specified".to_string(),
+        );
     }
 
     // Check mock
     if let Some(ref mock) = *MOCK_WINDOWS.lock().unwrap() {
         let matched = mock.iter().find(|w| {
             if let Some(h) = hwnd {
-                if w.hwnd == h { return true; }
+                if w.hwnd == h {
+                    return true;
+                }
             }
             if let Some(p) = pid {
-                if w.pid == p { return true; }
+                if w.pid == p {
+                    return true;
+                }
             }
             if let Some(t) = title {
-                if w.title.to_lowercase().contains(&t.to_lowercase()) { return true; }
+                if w.title.to_lowercase().contains(&t.to_lowercase()) {
+                    return true;
+                }
             }
             false
         });
@@ -171,7 +190,10 @@ pub fn focus_window(
                 "pid": w.pid
             }));
         } else {
-            return Err(format!("Window not found with criteria (title: {:?}, pid: {:?}, hwnd: {:?})", title, pid, hwnd));
+            return Err(format!(
+                "Window not found with criteria (title: {:?}, pid: {:?}, hwnd: {:?})",
+                title, pid, hwnd
+            ));
         }
     }
 
@@ -193,20 +215,28 @@ pub fn close_window(
     hwnd: Option<usize>,
 ) -> Result<Value, String> {
     if title.is_none() && pid.is_none() && hwnd.is_none() {
-        return Err("At least one parameter of 'title', 'pid', or 'hwnd' must be specified".to_string());
+        return Err(
+            "At least one parameter of 'title', 'pid', or 'hwnd' must be specified".to_string(),
+        );
     }
 
     // Check mock
     if let Some(ref mut mock) = *MOCK_WINDOWS.lock().unwrap() {
         let pos = mock.iter().position(|w| {
             if let Some(h) = hwnd {
-                if w.hwnd == h { return true; }
+                if w.hwnd == h {
+                    return true;
+                }
             }
             if let Some(p) = pid {
-                if w.pid == p { return true; }
+                if w.pid == p {
+                    return true;
+                }
             }
             if let Some(t) = title {
-                if w.title.to_lowercase().contains(&t.to_lowercase()) { return true; }
+                if w.title.to_lowercase().contains(&t.to_lowercase()) {
+                    return true;
+                }
             }
             false
         });
@@ -221,7 +251,10 @@ pub fn close_window(
                 "pid": removed.pid
             }));
         } else {
-            return Err(format!("Window not found with criteria (title: {:?}, pid: {:?}, hwnd: {:?})", title, pid, hwnd));
+            return Err(format!(
+                "Window not found with criteria (title: {:?}, pid: {:?}, hwnd: {:?})",
+                title, pid, hwnd
+            ));
         }
     }
 
@@ -345,7 +378,10 @@ pub(crate) mod win_impl {
                 sys,
             };
 
-            let _ = EnumWindows(Some(enum_windows_callback), LPARAM(&mut ctx as *mut _ as isize));
+            let _ = EnumWindows(
+                Some(enum_windows_callback),
+                LPARAM(&mut ctx as *mut _ as isize),
+            );
             Ok(ctx.windows)
         }
     }
@@ -388,8 +424,12 @@ pub(crate) mod win_impl {
         hwnd_opt: Option<usize>,
     ) -> Result<Value, String> {
         let windows = list_windows(false)?;
-        let target = find_target_window(&windows, title, pid, hwnd_opt)
-            .ok_or_else(|| format!("Window not found (title: {:?}, pid: {:?}, hwnd: {:?})", title, pid, hwnd_opt))?;
+        let target = find_target_window(&windows, title, pid, hwnd_opt).ok_or_else(|| {
+            format!(
+                "Window not found (title: {:?}, pid: {:?}, hwnd: {:?})",
+                title, pid, hwnd_opt
+            )
+        })?;
 
         let hwnd = HWND(target.hwnd as isize);
         unsafe {
@@ -419,8 +459,12 @@ pub(crate) mod win_impl {
         hwnd_opt: Option<usize>,
     ) -> Result<Value, String> {
         let windows = list_windows(false)?;
-        let target = find_target_window(&windows, title, pid, hwnd_opt)
-            .ok_or_else(|| format!("Window not found (title: {:?}, pid: {:?}, hwnd: {:?})", title, pid, hwnd_opt))?;
+        let target = find_target_window(&windows, title, pid, hwnd_opt).ok_or_else(|| {
+            format!(
+                "Window not found (title: {:?}, pid: {:?}, hwnd: {:?})",
+                title, pid, hwnd_opt
+            )
+        })?;
 
         let hwnd = HWND(target.hwnd as isize);
         unsafe {
@@ -444,13 +488,19 @@ pub(crate) mod win_impl {
     ) -> Option<&'a WindowInfo> {
         windows.iter().find(|w| {
             if let Some(h) = hwnd {
-                if w.hwnd == h { return true; }
+                if w.hwnd == h {
+                    return true;
+                }
             }
             if let Some(p) = pid {
-                if w.pid == p { return true; }
+                if w.pid == p {
+                    return true;
+                }
             }
             if let Some(t) = title {
-                if w.title.to_lowercase().contains(&t.to_lowercase()) { return true; }
+                if w.title.to_lowercase().contains(&t.to_lowercase()) {
+                    return true;
+                }
             }
             false
         })
@@ -482,10 +532,11 @@ mod non_windows_impl {
                 w.height().unwrap_or(0) as i32,
             ];
 
-            if only_visible && (is_minimized || title.trim().is_empty() || rect[2] <= 0 || rect[3] <= 0) {
+            if only_visible
+                && (is_minimized || title.trim().is_empty() || rect[2] <= 0 || rect[3] <= 0)
+            {
                 continue;
             }
-
 
             // Find matching PID by process_name
             let pid = sys
@@ -535,9 +586,102 @@ mod non_windows_impl {
         Ok(result)
     }
 
+    #[cfg(target_os = "macos")]
+    fn macos_direct_foreground_window() -> Option<WindowState> {
+        use core_foundation::base::{CFType, TCFType};
+        use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+        use core_foundation::number::CFNumber;
+        use core_foundation::string::CFString;
+        use core_graphics::geometry::CGRect;
+        use core_graphics::window::{
+            copy_window_info, kCGNullWindowID, kCGWindowBounds,
+            kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowOwnerName, kCGWindowOwnerPID,
+        };
+
+        let array = copy_window_info(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)?;
+        if array.is_empty() {
+            return None;
+        }
+
+        let k_name = unsafe { CFString::wrap_under_get_rule(kCGWindowName) };
+        let k_owner = unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerName) };
+        let k_pid = unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerPID) };
+        let k_bounds = unsafe { CFString::wrap_under_get_rule(kCGWindowBounds) };
+
+        for i in 0..array.len() {
+            let Some(item) = array.get(i) else { continue };
+            let ptr: *const std::ffi::c_void = *item;
+            let dict: CFDictionary<CFString, CFType> = unsafe {
+                TCFType::wrap_under_get_rule(ptr as CFDictionaryRef)
+            };
+
+            let title: Option<String> = dict
+                .find(&k_name)
+                .and_then(|v| v.downcast::<CFString>())
+                .map(|s| s.to_string());
+
+            let Some(title) = title else { continue };
+            let trimmed = title.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let owner_name: Option<String> = dict
+                .find(&k_owner)
+                .and_then(|v| v.downcast::<CFString>())
+                .map(|s| s.to_string());
+
+            if trimmed == "StatusIndicator" && owner_name.as_deref() == Some("Window Server") {
+                continue;
+            }
+
+            // Extract bounds and ignore zero-size windows
+            let bounds: Option<CGRect> = dict
+                .find(&k_bounds)
+                .and_then(|v| v.downcast::<CFDictionary>())
+                .and_then(|d| CGRect::from_dict_representation(&d));
+
+            if let Some(rect) = bounds {
+                if rect.size.width <= 0.0 || rect.size.height <= 0.0 {
+                    continue;
+                }
+            }
+
+            let pid = dict
+                .find(&k_pid)
+                .and_then(|v| v.downcast::<CFNumber>())
+                .and_then(|n| n.to_i64())
+                .unwrap_or(0) as usize;
+
+            let is_dialog = trimmed.contains("对话框")
+                || trimmed.contains("Dialog")
+                || trimmed.contains("Alert")
+                || trimmed.contains("Confirm")
+                || trimmed.contains("Prompt");
+
+            return Some(WindowState {
+                hwnd: pid,
+                title: trimmed.to_string(),
+                is_dialog,
+            });
+        }
+
+        None
+    }
+
     pub fn capture_foreground_window() -> Option<WindowState> {
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(state) = macos_direct_foreground_window() {
+                return Some(state);
+            }
+        }
+
         let windows = list_windows(true).ok()?;
-        let fg = windows.iter().find(|w| w.is_foreground).or_else(|| windows.first())?;
+        let fg = windows
+            .iter()
+            .find(|w| w.is_foreground)
+            .or_else(|| windows.first())?;
 
         let is_dialog = fg.title.contains("对话框")
             || fg.title.contains("Dialog")
@@ -558,18 +702,32 @@ mod non_windows_impl {
         hwnd_opt: Option<usize>,
     ) -> Result<Value, String> {
         let windows = list_windows(false)?;
-        let target = windows.iter().find(|w| {
-            if let Some(h) = hwnd_opt {
-                if w.hwnd == h { return true; }
-            }
-            if let Some(p) = pid {
-                if w.pid == p { return true; }
-            }
-            if let Some(t) = title {
-                if w.title.to_lowercase().contains(&t.to_lowercase()) { return true; }
-            }
-            false
-        }).ok_or_else(|| format!("Window not found (title: {:?}, pid: {:?}, hwnd: {:?})", title, pid, hwnd_opt))?;
+        let target = windows
+            .iter()
+            .find(|w| {
+                if let Some(h) = hwnd_opt {
+                    if w.hwnd == h {
+                        return true;
+                    }
+                }
+                if let Some(p) = pid {
+                    if w.pid == p {
+                        return true;
+                    }
+                }
+                if let Some(t) = title {
+                    if w.title.to_lowercase().contains(&t.to_lowercase()) {
+                        return true;
+                    }
+                }
+                false
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Window not found (title: {:?}, pid: {:?}, hwnd: {:?})",
+                    title, pid, hwnd_opt
+                )
+            })?;
 
         #[cfg(target_os = "macos")]
         {
@@ -596,18 +754,32 @@ mod non_windows_impl {
         hwnd_opt: Option<usize>,
     ) -> Result<Value, String> {
         let windows = list_windows(false)?;
-        let target = windows.iter().find(|w| {
-            if let Some(h) = hwnd_opt {
-                if w.hwnd == h { return true; }
-            }
-            if let Some(p) = pid {
-                if w.pid == p { return true; }
-            }
-            if let Some(t) = title {
-                if w.title.to_lowercase().contains(&t.to_lowercase()) { return true; }
-            }
-            false
-        }).ok_or_else(|| format!("Window not found (title: {:?}, pid: {:?}, hwnd: {:?})", title, pid, hwnd_opt))?;
+        let target = windows
+            .iter()
+            .find(|w| {
+                if let Some(h) = hwnd_opt {
+                    if w.hwnd == h {
+                        return true;
+                    }
+                }
+                if let Some(p) = pid {
+                    if w.pid == p {
+                        return true;
+                    }
+                }
+                if let Some(t) = title {
+                    if w.title.to_lowercase().contains(&t.to_lowercase()) {
+                        return true;
+                    }
+                }
+                false
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Window not found (title: {:?}, pid: {:?}, hwnd: {:?})",
+                    title, pid, hwnd_opt
+                )
+            })?;
 
         #[cfg(target_os = "macos")]
         {

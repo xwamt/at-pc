@@ -2,9 +2,21 @@
 name = "at-pc-agent"
 version = "1.0.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[lints]
+workspace = true
+
+[build-dependencies]
+at-pc-build-support = { workspace = true }
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe", "dep:egui"]
 
 [dependencies]
 at-pc-protocol = { workspace = true }
+at-pc-desktop-core = { path = "../desktop-core" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -18,11 +30,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 toml = { workspace = true }
 futures-util = { workspace = true }
-ring = { workspace = true }
-rand = { workspace = true }
 tokio-tungstenite = { workspace = true }
-eframe = { workspace = true }
-egui = { workspace = true }
+eframe = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
@@ -50,8 +60,7 @@ windows = { version = "0.52", features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.23"
+core-foundation = "0.9"
 
 [dev-dependencies]
 tokio = { workspace = true }
-at-pc-server = { path = "../server" }
-rcgen = { workspace = true }

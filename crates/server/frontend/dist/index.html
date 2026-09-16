@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AT-PC 集中管控平台 · Obsidian Edition</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='128' viewBox='0 0 128 128'%3E%3Crect x='10' y='10' width='108' height='108' rx='26' fill='%230f172a'/%3E%3Cpath d='M34 43 L56 64 L34 85' fill='none' stroke='%2338bdf8' stroke-width='11' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M73 80 V43 H85 C95 43 99 49 99 56 C99 63 95 69 85 69 H73' fill='none' stroke='%23FFFFFF' stroke-width='10.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M72 88 H99' fill='none' stroke='%2310b981' stroke-width='10.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <script type="module">(function(){const t=document.createElement("link").relList;if(t&&t.supports&&t.supports("modulepreload"))return;for(const a of document.querySelectorAll('link[rel="modulepreload"]'))o(a);new MutationObserver(a=>{for(const i of a)if(i.type==="childList")for(const l of i.addedNodes)l.tagName==="LINK"&&l.rel==="modulepreload"&&o(l)}).observe(document,{childList:!0,subtree:!0});function n(a){const i={};return a.integrity&&(i.integrity=a.integrity),a.referrerPolicy&&(i.referrerPolicy=a.referrerPolicy),a.crossOrigin==="use-credentials"?i.credentials="include":a.crossOrigin==="anonymous"?i.credentials="omit":i.credentials="same-origin",i}function o(a){if(a.ep)return;a.ep=!0;const i=n(a);fetch(a.href,i)}})();const A="at_pc_auth_token";function Y(){return new URLSearchParams(globalThis.location?.search??"")}function N(){return globalThis.sessionStorage}function Q(e={}){const t=e.searchParams??Y(),n=e.storage??N(),o=t.get("token")||t.get("pin");return o?(n.setItem(A,o),o):n.getItem(A)||""}function V(e,t=N()){e?t.setItem(A,e):t.removeItem(A)}function U(){return Q()}function Z(e){V(e)}function ee(e,t){return!e||!t||(e instanceof Headers?e.has("Authorization")||e.set("Authorization",`Bearer ${t}`):e.Authorization||(e.Authorization=`Bearer ${t}`)),e}const f={terminals:()=>"/api/terminals",calls:()=>"/api/calls",audit:()=>"/api/audit",auditExport:()=>"/api/audit/export",terminal:e=>`/api/terminals/${encodeURIComponent(e)}`,terminalMeta:e=>`/api/terminals/${encodeURIComponent(e)}/meta`,invoke:e=>`/api/terminals/${encodeURIComponent(e)}/invoke`,terminalCalls:e=>`/api/terminals/${encodeURIComponent(e)}/calls`,cancelCall:e=>`/api/calls/${encodeURIComponent(e)}/cancel`,desktopStream:e=>`/api/terminals/${encodeURIComponent(e)}/desktop/stream`,desktopStop:e=>`/api/terminals/${encodeURIComponent(e)}/desktop/stop`,desktopFrame:e=>`/api/terminals/${encodeURIComponent(e)}/desktop/frame`,desktopFrameRaw:e=>`/api/terminals/${encodeURIComponent(e)}/desktop/frame.jpg`,desktopInput:e=>`/api/terminals/${encodeURIComponent(e)}/desktop/input`};async function te(e,t={},n={}){const o=n.fetchImpl??globalThis.fetch.bind(globalThis),a=n.getToken??U,i={...t,headers:t.headers||{}};ee(i.headers,a());const l=await o(e,i);return l.status===401&&n.onUnauthorized?.(),l}function r(e){return document.getElementById(e)}function D(e){return Array.from(document.querySelectorAll(e))}function ne(e,t,n="fit"){const o=e.getBoundingClientRect();if(o.width<=0||o.height<=0)return{x:0,y:0};if(n==="stretch"){const S=Math.max(0,Math.min(o.width,t.clientX-o.left)),b=Math.max(0,Math.min(o.height,t.clientY-o.top));return{x:Math.round(S/o.width*65535),y:Math.round(b/o.height*65535)}}if(n==="original"){const S=Math.max(0,(o.width-e.width)/2),b=Math.max(0,(o.height-e.height)/2),C=Math.max(0,Math.min(e.width,t.clientX-o.left-S)),w=Math.max(0,Math.min(e.height,t.clientY-o.top-b));return{x:Math.round(C/e.width*65535),y:Math.round(w/e.height*65535)}}const a=e.width/e.height,i=o.width/o.height;let l,p,g,x;i>a?(p=o.height,l=p*a,g=(o.width-l)/2,x=0):(l=o.width,p=l/a,g=0,x=(o.height-p)/2);const c=t.clientX-o.left-g,h=t.clientY-o.top-x,M=Math.max(0,Math.min(l,c)),k=Math.max(0,Math.min(p,h));return{x:Math.round(M/l*65535),y:Math.round(k/p*65535)}}function oe({coords:e,monitors:t,displayIndex:n}){if(t&&t.length>0){const o=t.find(a=>a.display_index===n);if(o){const a=o.x+Math.round(e.x/65535*o.width),i=o.y+Math.round(e.y/65535*o.height);return{action:"MouseMovePixel",data:{x:Math.max(0,a),y:Math.max(0,i)}}}}return{action:"MouseMove",data:e}}let B=()=>{};function se(e){B=e}function y(e,t={}){return te(e,t,{onUnauthorized:B})}let R=null;function ae(e){R=e}function ie(){const e=r("authModal");e&&(e.style.display="flex");const t=r("authTokenInput");t&&t.focus()}function re(){const e=r("authModal");e&&(e.style.display="none")}function v(e,t,n=!1){r("modalTitle").innerText=e,r("modalContent").innerHTML=t;const o=document.querySelector("#resultModal .modal");n?o?.classList.add("modal-lg"):o?.classList.remove("modal-lg"),r("resultModal").style.display="flex"}function F(){R?.(),r("resultModal").style.display="none"}const s={currentStreamTid:null,streamPollTimer:null,rdActualW:1920,rdActualH:1080,lastFrameTime:Date.now(),frameCount:0,fpsTimer:null,isSendingInput:!1,pendingMouseMove:null,currentCursorMode:"default",currentScaleMode:"fit",currentStreamDisplayIndex:0,activeMonitorsList:[],isFlushingMove:!1,inputQueue:Promise.resolve(),isLocalMouseDown:!1,localPressedButton:0,globalMouseUpHandler:null,windowBlurHandler:null};function le(e,t){s.currentCursorMode=e,D(".cursor-tool-btn").forEach(o=>{o.classList.remove("active")}),t&&t.classList.add("active");const n=r("rdCanvas");n&&(n.style.cursor=e)}function ce(e,t){s.currentScaleMode=e,D(".scale-tool-btn").forEach(o=>{o.classList.remove("active")}),t&&t.classList.add("active");const n=r("rdCanvas");n&&(e==="stretch"?(n.style.objectFit="fill",n.style.width="100%",n.style.height="100%"):e==="original"?(n.style.objectFit="none",n.style.width="auto",n.style.height="auto"):(n.style.objectFit="contain",n.style.width="100%",n.style.height="100%"))}function $(e){if(s.currentCursorMode!=="default")return;const t=r("rdCanvas");t&&(e.altKey&&e.shiftKey?t.style.cursor="nwse-resize":e.altKey?t.style.cursor="ew-resize":e.shiftKey?t.style.cursor="ns-resize":e.ctrlKey?t.style.cursor="move":t.style.cursor="default")}function j(e,t,n){const o=ne(t,n,s.currentScaleMode),a=oe({coords:o,monitors:s.activeMonitorsList,displayIndex:s.currentStreamDisplayIndex});d(e,a)}function d(e,t){if(s.currentStreamTid){if(t.action==="MouseMove"||t.action==="MouseMovePixel"){s.pendingMouseMove=t,K(e);return}s.inputQueue=s.inputQueue.then(async()=>{if(s.pendingMouseMove){const n=s.pendingMouseMove;s.pendingMouseMove=null;try{await y(f.desktopInput(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(n)})}catch{}}try{await y(f.desktopInput(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)})}catch(n){console.warn("Failed to send input event:",n)}})}}function K(e){if(s.isFlushingMove||!s.pendingMouseMove||!s.currentStreamTid)return;s.isFlushingMove=!0;const t=s.pendingMouseMove;s.pendingMouseMove=null,y(f.desktopInput(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)}).catch(n=>console.warn("MouseMove send error:",n)).finally(()=>{s.isFlushingMove=!1,s.pendingMouseMove&&s.currentStreamTid&&setTimeout(()=>K(e),20)})}function H(e){e||(e=s.currentStreamTid),e&&(s.isLocalMouseDown=!1,d(e,{action:"MouseUp",data:{button:0}}),d(e,{action:"MouseUp",data:{button:2}}),d(e,{action:"MouseUp",data:{button:1}}),d(e,{action:"KeyUp",data:{key_code:16,key:"Shift"}}),d(e,{action:"KeyUp",data:{key_code:17,key:"Control"}}),d(e,{action:"KeyUp",data:{key_code:18,key:"Alt"}}))}function de(e,t){s.currentStreamTid&&(t==="ctrl_alt_del"?(d(e,{action:"KeyDown",data:{key_code:17,key:"Control"}}),d(e,{action:"KeyDown",data:{key_code:18,key:"Alt"}}),d(e,{action:"KeyDown",data:{key_code:46,key:"Delete"}}),setTimeout(()=>{d(e,{action:"KeyUp",data:{key_code:46,key:"Delete"}}),d(e,{action:"KeyUp",data:{key_code:18,key:"Alt"}}),d(e,{action:"KeyUp",data:{key_code:17,key:"Control"}})},80)):t==="win_r"?(d(e,{action:"KeyDown",data:{key_code:91,key:"Meta"}}),d(e,{action:"KeyDown",data:{key_code:82,key:"r"}}),setTimeout(()=>{d(e,{action:"KeyUp",data:{key_code:82,key:"r"}}),d(e,{action:"KeyUp",data:{key_code:91,key:"Meta"}})},80)):t==="taskmgr"?(d(e,{action:"KeyDown",data:{key_code:17,key:"Control"}}),d(e,{action:"KeyDown",data:{key_code:16,key:"Shift"}}),d(e,{action:"KeyDown",data:{key_code:27,key:"Escape"}}),setTimeout(()=>{d(e,{action:"KeyUp",data:{key_code:27,key:"Escape"}}),d(e,{action:"KeyUp",data:{key_code:16,key:"Shift"}}),d(e,{action:"KeyUp",data:{key_code:17,key:"Control"}})},80)):t==="esc"&&(d(e,{action:"KeyDown",data:{key_code:27,key:"Escape"}}),setTimeout(()=>{d(e,{action:"KeyUp",data:{key_code:27,key:"Escape"}})},50)))}async function ue(e){s.currentStreamTid&&await z(),s.currentStreamTid=e,s.currentStreamDisplayIndex=0,s.activeMonitorsList=[],s.frameCount=0,s.lastFrameTime=Date.now(),s.pendingMouseMove=null,s.isSendingInput=!1,s.currentCursorMode="default",s.currentScaleMode="fit",s.isLocalMouseDown=!1,s.inputQueue=Promise.resolve();const t=`
+        <div id="rdMainWrapper" class="rd-main-wrapper">
+          <div class="rd-hud" id="rdHud">
+            <div class="rd-hud-section">
+              <span class="tag" style="background: #080c14; padding: 4px 8px;"><div class="dot pulse"></div> <span id="rdStatus">建立安全推流...</span></span>
+              <span id="rdResolution" style="color: var(--text-muted); font-family: monospace;">-</span>
+              <span id="rdFps" style="color: var(--primary); font-weight: 700; font-family: monospace;">- FPS</span>
+            </div>
+
+            <div class="rd-hud-section" id="rdMonitorsSection" style="display: none;">
+              <span style="color: var(--text-dim); font-size: 11px;">显示器:</span>
+              <div id="rdMonitorButtons" style="display: flex; gap: 4px;"></div>
+            </div>
+
+            <div class="rd-hud-section">
+              <span style="color: var(--text-dim); font-size: 11px;">鼠标手势:</span>
+              <button class="cursor-tool-btn active" data-cursor="default" onclick="setCursorMode('default', this)" title="普通鼠标箭头（可随时按住 Alt 键触发拉宽）">↖ 默认</button>
+              <button class="cursor-tool-btn" data-cursor="ew-resize" onclick="setCursorMode('ew-resize', this)" title="水平拉宽模式（拖动窗口左右边框调整宽度）">↔ 水平拉宽</button>
+              <button class="cursor-tool-btn" data-cursor="ns-resize" onclick="setCursorMode('ns-resize', this)" title="垂直拉长模式（拖动窗口上下边框）">↕ 垂直拉长</button>
+              <button class="cursor-tool-btn" data-cursor="nwse-resize" onclick="setCursorMode('nwse-resize', this)" title="对角缩放模式（拖动窗口四角）">⤡ 对角缩放</button>
+              <button class="cursor-tool-btn" data-cursor="text" onclick="setCursorMode('text', this)" title="文本选择工字光标">ꕯ 文本</button>
+            </div>
+
+            <div class="rd-hud-section">
+              <span style="color: var(--text-dim); font-size: 11px;">画面显示:</span>
+              <button class="scale-tool-btn active" onclick="setScaleMode('fit', this)" title="保持比例自适应填满全屏">📐 自适应全屏</button>
+              <button class="scale-tool-btn" onclick="setScaleMode('stretch', this)" title="强制铺满屏幕（无黑边）">↔️ 强制铺满</button>
+              <button class="scale-tool-btn" onclick="setScaleMode('original', this)" title="1:1 原生像素点对点显示">🔍 1:1</button>
+            </div>
+
+            <div class="rd-hud-section">
+              <span style="color: var(--text-dim); font-size: 11px;">快捷操作:</span>
+              <button class="key-btn" style="color: var(--primary); font-weight: 600;" onclick="releaseAllInputs('${e}')" title="紧急复位并释放所有鼠标与键盘按键">🔓 释放按键</button>
+              <button class="key-btn" onclick="injectSpecialKey('${e}', 'ctrl_alt_del')">Ctrl+Alt+Del</button>
+              <button class="key-btn" onclick="injectSpecialKey('${e}', 'win_r')">Win+R</button>
+              <button class="key-btn" onclick="injectSpecialKey('${e}', 'taskmgr')">任务管理器</button>
+              <button class="key-btn" onclick="injectSpecialKey('${e}', 'esc')">Esc</button>
+            </div>
+
+            <div class="rd-hud-section">
+              <button id="rdFsBtn" class="btn btn-secondary btn-sm" onclick="toggleCanvasFullscreen()">⛶ 网页全屏</button>
+              <button class="btn btn-danger btn-sm" onclick="stopAndCloseDesktop()">⏹ 断开推流</button>
+            </div>
+          </div>
+
+          <div id="rdCanvasContainer" class="rd-canvas-container">
+            <canvas id="rdCanvas" class="rd-canvas" tabindex="0"></canvas>
+            <div id="rdLoadingOverlay" style="position: absolute; color: #94a3b8; font-size: 13px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+              <div class="dot pulse" style="width: 12px; height: 12px;"></div>
+              正在缓冲远端屏幕画面...
+            </div>
+          </div>
+
+          <div class="rd-bottom-bar" style="margin-top: 8px; font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center;">
+            <span>💡 <b>交互指引</b>: 点击画面捕获鼠标焦点。已升级为标准鼠标箭头，<b>按住 Alt 键移动可临时触发 [↔ 水平拉宽] 手势</b>；若按键粘连可点击顶部 [🔓 释放按键]。</span>
+            <span style="color: var(--primary); font-family: monospace;">纯 Rust 原生抓帧 · 智能自适应全屏</span>
+          </div>
+        </div>
+      `;v(`🖥️ 远程桌面直控 - [${e}]`,t,!0);try{await y(f.desktopStream(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({fps:15,quality:55,display_index:s.currentStreamDisplayIndex})})}catch(n){console.error("Start stream failed",n)}y(f.invoke(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tool:"list_monitors",arguments:{}})}).then(n=>n.json()).then(n=>{if(n&&n.success&&Array.isArray(n.result)&&n.result.length>0){s.activeMonitorsList=n.result;const o=r("rdMonitorButtons"),a=r("rdMonitorsSection");o&&a&&(o.innerHTML=s.activeMonitorsList.map(i=>`
+              <button class="scale-tool-btn ${i.display_index===s.currentStreamDisplayIndex?"active":""}" data-display-index="${i.display_index}" onclick="switchStreamDisplay('${e}', ${i.display_index})" title="${i.name} (${i.width}x${i.height})">🖥️ 屏幕 ${i.display_index}${i.is_primary?" (主屏)":""}</button>
+            `).join(""),s.activeMonitorsList.length>=1&&(a.style.display="flex"))}}).catch(n=>console.warn("Failed to fetch monitors:",n)),me(e)}async function pe(e,t){if(s.currentStreamDisplayIndex===t)return;s.currentStreamDisplayIndex=t;const n=r("rdMonitorButtons");n&&n.querySelectorAll("button").forEach(a=>{a.getAttribute("data-display-index")===String(t)?a.classList.add("active"):a.classList.remove("active")});const o=r("rdStatus");o&&(o.innerText=`切换至屏幕 ${t}...`);try{await y(f.desktopStream(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({fps:15,quality:55,display_index:t})})}catch(a){console.error(`Failed to switch to display ${t}:`,a)}}function me(e){const t=r("rdCanvas");if(!t)return;const n=t.getContext("2d"),o=r("rdLoadingOverlay"),a=r("rdStatus"),i=r("rdResolution"),l=r("rdFps");let p=0;t.addEventListener("mousemove",c=>{$(c);const h=Date.now();h-p<35||(p=h,j(e,t,c))}),t.addEventListener("mousedown",c=>{t.focus(),$(c),s.isLocalMouseDown=!0,s.localPressedButton=c.button,j(e,t,c),d(e,{action:"MouseDown",data:{button:c.button}})}),s.globalMouseUpHandler=c=>{s.isLocalMouseDown&&(s.isLocalMouseDown=!1,$(c),j(e,t,c),d(e,{action:"MouseUp",data:{button:s.localPressedButton}}))},window.addEventListener("mouseup",s.globalMouseUpHandler),s.windowBlurHandler=()=>{s.isLocalMouseDown&&H(e)},window.addEventListener("blur",s.windowBlurHandler),t.addEventListener("contextmenu",c=>{c.preventDefault()}),t.addEventListener("wheel",c=>{c.preventDefault();const h=c.deltaY>0?-120:120;d(e,{action:"MouseWheel",data:{delta_y:h}})}),t.addEventListener("keydown",c=>{c.preventDefault(),$(c),d(e,{action:"KeyDown",data:{key_code:c.keyCode,key:c.key}})}),t.addEventListener("keyup",c=>{c.preventDefault(),$(c),d(e,{action:"KeyUp",data:{key_code:c.keyCode,key:c.key}})}),window.addEventListener("keydown",$),window.addEventListener("keyup",$);let g=0;async function x(c){for(;s.currentStreamTid===c;){try{const h=await y(f.desktopFrameRaw(c));if(h.ok){const M=h.headers.get("X-Frame-Timestamp"),k=M?parseInt(M,10):0;if(!k||k!==g){k&&(g=k);const S=await h.blob(),b=parseInt(h.headers.get("X-Frame-Width")||"0",10),C=parseInt(h.headers.get("X-Frame-Height")||"0",10);if(typeof createImageBitmap=="function"){const w=await createImageBitmap(S);s.currentStreamTid===c&&(o&&(o.style.display="none"),a&&(a.innerText="实时推流中"),s.rdActualW=b||w.width,s.rdActualH=C||w.height,(t.width!==s.rdActualW||t.height!==s.rdActualH)&&(t.width=s.rdActualW,t.height=s.rdActualH,i&&(i.innerText=`${s.rdActualW} × ${s.rdActualH}`)),n.drawImage(w,0,0),s.frameCount++),w.close?.()}else await new Promise(w=>{const L=URL.createObjectURL(S),T=new Image;T.onload=()=>{if(URL.revokeObjectURL(L),s.currentStreamTid!==c)return w();o&&(o.style.display="none"),a&&(a.innerText="实时推流中"),s.rdActualW=b||T.width,s.rdActualH=C||T.height,(t.width!==s.rdActualW||t.height!==s.rdActualH)&&(t.width=s.rdActualW,t.height=s.rdActualH,i&&(i.innerText=`${s.rdActualW} × ${s.rdActualH}`)),n.drawImage(T,0,0),s.frameCount++,w()},T.onerror=()=>{URL.revokeObjectURL(L),w()},T.src=L})}}}catch{}await new Promise(h=>setTimeout(h,35))}}x(e),s.fpsTimer=setInterval(()=>{const c=Date.now(),h=(c-s.lastFrameTime)/1e3;if(h>0){const M=Math.round(s.frameCount/h);l&&(l.innerText=`${M} FPS`)}s.frameCount=0,s.lastFrameTime=c},1e3)}function fe(){const e=r("rdMainWrapper");e&&(document.fullscreenElement?document.exitFullscreen():e.requestFullscreen().catch(t=>alert(`无法全屏: ${t.message}`)))}function ye(){document.addEventListener("fullscreenchange",()=>{const e=!!document.fullscreenElement,t=r("rdFsBtn");t&&(t.innerText=e?"⛶ 退出全屏":"⛶ 网页全屏")})}async function z(){if(s.fpsTimer&&(clearInterval(s.fpsTimer),s.fpsTimer=null),window.removeEventListener("keydown",$),window.removeEventListener("keyup",$),s.globalMouseUpHandler&&(window.removeEventListener("mouseup",s.globalMouseUpHandler),s.globalMouseUpHandler=null),s.windowBlurHandler&&(window.removeEventListener("blur",s.windowBlurHandler),s.windowBlurHandler=null),document.fullscreenElement)try{await document.exitFullscreen()}catch{}const e=s.currentStreamTid;if(e&&s.isLocalMouseDown&&H(e),s.currentStreamTid=null,s.currentStreamDisplayIndex=0,s.activeMonitorsList=[],s.pendingMouseMove=null,s.isFlushingMove=!1,s.isLocalMouseDown=!1,e)try{await y(f.desktopStop(e),{method:"POST"})}catch{}const t=r("resultModal");t&&(t.style.display="none")}function u(e){return e?String(e).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;"):""}function E(e){return e==null||e===""?"":String(e).replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/\r/g,"\\r").replace(/\n/g,"\\n").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029").replace(/</g,"\\u003c").replace(/>/g,"\\u003e")}function he(e){const t=e.status==="Online",n=e.latest_metrics||{},o=(n.cpu_usage_percent||0).toFixed(1),a=((n.memory_used_mb||0)/1024).toFixed(1),i=((n.memory_total_mb||1)/1024).toFixed(1),l=Math.min(100,Math.round((n.memory_used_mb||0)/(n.memory_total_mb||1)*100)),p=t&&(Number(o)>75||l>80);let g="fill-emerald";Number(o)>80?g="fill-rose":Number(o)>50&&(g="fill-amber");let x="fill-emerald";l>80?x="fill-rose":l>50&&(x="fill-amber");const c=e.custom_name?u(e.custom_name):u(e.info?.hostname||"Unknown Host"),h=!!e.custom_name,M=u(e.info?.hostname||"-"),k=e.info?.terminal_id||"",S=u(k),b=E(k),C=e.notes?u(e.notes):"",w=Array.isArray(e.tags)?e.tags:[],L=u(e.info?.os_version||"-"),T=u(e.info?.lan_ip||"-"),I=u(e.info?.username||"-");return`
+          <div class="card">
+            <div class="card-header">
+              <div style="flex: 1; min-width: 0;">
+                <div class="device-name">
+                  <span title="${h?"自定义名称: "+c:"设备尚未命名，点击按钮设置别名"}">${c}</span>
+                  ${h?"":'<span class="unnamed-hint">未命名</span>'}
+                  <button class="edit-name-btn" onclick="openEditMetaModal('${b}')" title="设置别名 / 备注 / 标签">✏️ 命名</button>
+                </div>
+                <div class="hostname-sub">
+                  <span>主机: <b>${M}</b></span>
+                  <span>·</span>
+                  <span class="device-id">${S}</span>
+                </div>
+                ${C?`<div class="note-box">📝 ${C}</div>`:""}
+                ${w.length>0?`
+                  <div class="tags-container">
+                    ${w.map(X=>`<span class="tag-pill"># ${u(X)}</span>`).join("")}
+                  </div>
+                `:""}
+              </div>
+              <div class="badge-wrap" style="flex-shrink: 0;">
+                ${p?'<span class="status-badge high-load">⚠️ 负载告警</span>':""}
+                <span class="status-badge ${t?"online":"offline"}">
+                  ${t?"● 在线":"○ 离线"}
+                </span>
+                ${t?"":`<button class="btn btn-danger btn-sm" style="padding: 2px 7px; font-size: 11px;" onclick="deleteOfflineTerminal('${b}')" title="从平台移除此离线设备记录">🗑️ 移除</button>`}
+              </div>
+            </div>
+
+            <div class="metrics">
+              <div>
+                <div class="metric-row">
+                  <span>CPU 占用</span>
+                  <b>${o}%</b>
+                </div>
+                <div class="progress-bar-bg">
+                  <div class="progress-bar-fill ${g}" style="width: ${Math.min(100,Math.max(2,Number(o)))}%"></div>
+                </div>
+              </div>
+              <div>
+                <div class="metric-row">
+                  <span>内存负载</span>
+                  <b>${a} GB / ${i} GB (${l}%)</b>
+                </div>
+                <div class="progress-bar-bg">
+                  <div class="progress-bar-fill ${x}" style="width: ${l}%"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="info-list">
+              <div class="info-item">系统: <b>${L}</b></div>
+              <div class="info-item">内网 IP: <b style="font-family: monospace;">${T}</b></div>
+              <div class="info-item">用户: <b>${I}</b></div>
+              <div class="info-item">心跳: <b style="color: ${t?"var(--success)":"var(--text-dim)"}">${e.last_heartbeat_elapsed_secs>86400?"很久以前":e.last_heartbeat_elapsed_secs+"s 前"}</b></div>
+            </div>
+
+            <div class="card-actions">
+              <button class="btn btn-featured btn-sm" onclick="openRemoteDesktop('${b}')">🖥️ 远程桌面直控</button>
+              <button class="btn btn-secondary btn-sm" onclick="runOverview('${b}')">📊 硬件概况</button>
+              <button class="btn btn-secondary btn-sm" onclick="runScreenshot('${b}')">📸 屏幕截图</button>
+              <button class="btn btn-secondary btn-sm" onclick="runProcessManager('${b}')">🔍 进程管理</button>
+              <button class="btn btn-secondary btn-sm" onclick="runServiceManager('${b}')">⚙️ 系统服务</button>
+              <button class="btn btn-secondary btn-sm" onclick="openCommandModal('${b}')">⚡ 命令排障</button>
+            </div>
+          </div>
+        `}function ge(e,t){const n=t.name||"",o=t.exe_path?u(t.exe_path):"";return`
+          <tr class="proc-row" data-name="${u(n.toLowerCase())}" data-pid="${u(String(t.pid))}">
+            <td><code style="color: var(--primary);">${u(String(t.pid))}</code></td>
+            <td><b>${u(n)}</b> ${o?`<span style="color: var(--text-dim); font-size: 11px;">(${o})</span>`:""}</td>
+            <td><b>${t.memory_mb}</b> MB</td>
+            <td>${(t.cpu_usage||0).toFixed(1)}%</td>
+            <td style="text-align: right;">
+              <button class="btn btn-danger btn-sm" onclick="killTargetProc('${E(e)}', ${Number(t.pid)}, '${E(n)}')">终止</button>
+            </td>
+          </tr>
+        `}function ve(e){const t=(e||"").trim();return t?t.split(/[,，]/).map(n=>n.trim()).filter(Boolean):[]}function be(e){const t=e?.memory_used_mb||0,n=e?.memory_total_mb||1;return Math.min(100,Math.round(t/n*100))}function xe(e){return(e.latest_metrics?.cpu_usage_percent||0)>75||be(e.latest_metrics)>80}function we(e,{tab:t="all",search:n=""}={}){const o=(n||"").toLowerCase().trim();return(e||[]).filter(a=>{const i=a.status==="Online";if(t==="online"&&!i||t==="offline"&&i||t==="warn"&&(!i||!xe(a)))return!1;if(!o)return!0;const l=(a.info?.hostname||"").toLowerCase(),p=(a.info?.lan_ip||"").toLowerCase(),g=(a.info?.terminal_id||"").toLowerCase(),x=(a.info?.os_version||"").toLowerCase(),c=(a.custom_name||"").toLowerCase(),h=(a.notes||"").toLowerCase(),M=(a.tags||[]).join(" ").toLowerCase();return l.includes(o)||p.includes(o)||g.includes(o)||x.includes(o)||c.includes(o)||h.includes(o)||M.includes(o)})}const m={terminalsData:[],currentFilterTab:"all",runningCallsData:[],activeCmdCancelPoll:null};function Me(e,t){m.currentFilterTab=e,D(".filter-tab").forEach(n=>{n.classList.remove("active")}),t&&t.classList.add("active"),O()}function O(){const e=r("searchInput").value.toLowerCase().trim(),t=r("terminalGrid"),n=we(m.terminalsData,{tab:m.currentFilterTab,search:e}),o=m.terminalsData.filter(a=>a.status==="Online").length;if(r("onlineCount").innerText=String(o),r("totalCount").innerText=String(m.terminalsData.length),n.length===0){t.innerHTML=`
+          <div class="empty-state">
+            <h3>暂无匹配的终端设备</h3>
+            <p style="margin-top: 8px; font-size: 13px;">请在被协助电脑上启动 <code>at-pc-agent</code>，启动后将自动实时同步在此处</p>
+          </div>
+        `;return}t.innerHTML=n.map(a=>he(a)).join("")}async function P(){try{const e=await y(f.terminals());e.ok&&(m.terminalsData=await e.json(),O()),_()}catch(e){console.error("Failed to fetch terminals:",e)}}async function _(){try{const e=await y(f.calls());if(e.ok){const t=await e.json();m.runningCallsData=t.calls||[];const n=m.runningCallsData.length,o=r("runningCallsBtn"),a=r("runningCallsCount");o&&a&&(a.innerText=String(n),o.style.display=n>0?"inline-flex":"none")}}catch(e){console.debug("Failed to check running calls:",e)}}async function W(){await _();let e="";!m.runningCallsData||m.runningCallsData.length===0?e=`
+          <div style="text-align: center; padding: 28px 0; color: var(--text-muted);">
+            <div style="font-size: 32px; margin-bottom: 10px;">☕</div>
+            <div style="font-size: 14px; font-weight: 600; color: #fff;">当前没有任何正在执行的后台任务</div>
+            <div style="font-size: 12px; margin-top: 4px;">所有命令和工具调用已完成或空闲</div>
+          </div>
+        `:e=`
+          <div style="margin-bottom: 12px; font-size: 12.5px; color: var(--text-muted);">
+            共检测到 <b style="color: var(--warning);">${m.runningCallsData.length}</b> 个正在运行的任务。支持强杀目标进程树并中断执行通道：
+          </div>
+          <div style="max-height: 400px; overflow-y: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+              <thead>
+                <tr style="border-bottom: 1px solid var(--card-border); color: var(--text-muted);">
+                  <th style="padding: 8px 10px;">目标终端</th>
+                  <th style="padding: 8px 10px;">执行工具</th>
+                  <th style="padding: 8px 10px;">已耗时</th>
+                  <th style="padding: 8px 10px;">超时限制</th>
+                  <th style="padding: 8px 10px; text-align: right;">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${m.runningCallsData.map(t=>`
+                  <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                    <td style="padding: 8px 10px;">
+                      <span style="font-family: monospace; color: var(--primary); font-weight: 600;">${u(t.terminal_id)}</span>
+                    </td>
+                    <td style="padding: 8px 10px;">
+                      <span class="tag" style="padding: 2px 6px; font-size: 11px;">${u(t.tool_name)}</span>
+                    </td>
+                    <td style="padding: 8px 10px; color: var(--warning); font-family: monospace;">
+                      ${(t.elapsed_ms/1e3).toFixed(1)}s
+                    </td>
+                    <td style="padding: 8px 10px; color: var(--text-dim);">
+                      ${t.timeout_secs}s
+                    </td>
+                    <td style="padding: 8px 10px; text-align: right;">
+                      <button class="btn btn-sm" style="background: var(--danger); color: #fff; padding: 3px 8px; font-size: 11px;" onclick="cancelRunningCall('${u(t.call_id)}')">⏹ 终止</button>
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        `,v("⚡ 运行中任务监控与应急阻断",e)}async function $e(e){if(confirm(`确定要强制终止任务 [${e}] 及其子进程树吗？`))try{const n=await(await y(f.cancelCall(e),{method:"POST"})).json();n.success?(alert("已成功下发任务终止与进程树清理指令"),await _(),W()):alert(`终止失败: ${n.error}`)}catch(t){alert(`请求异常: ${t.message}`)}}function ke(e){const t=m.terminalsData.find(p=>p.info?.terminal_id===e);if(!t)return alert("未找到指定终端信息");const n=t.custom_name||"",o=t.notes||"",a=(t.tags||[]).join(", "),i=t.info?.hostname||"-",l=`
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <div style="background: #080c14; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--card-border); font-size: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div>终端编号 (ID): <b style="font-family: monospace; color: var(--primary);">${u(e)}</b></div>
+            <div>原始主机名: <b style="font-family: monospace;">${u(i)}</b></div>
+            <div>内网 IP: <b style="font-family: monospace;">${u(t.info?.lan_ip||"-")}</b></div>
+            <div>操作系统: <b>${u(t.info?.os_version||"-")}</b></div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" style="color: #f1f5f9; font-weight: 600;">
+              🏷️ 终端自定义名称 / 别名 (Custom Name / Alias):
+            </label>
+            <input type="text" id="metaCustomName" class="form-control" placeholder="例如：财务-出纳主控机、研发-张三-工作站..." value="${u(n)}" style="font-size: 13px;">
+            <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">便于控制台与 AI Agent 快速识别，保存后将在服务端持久化存储。若留空则自动降级显示原始主机名。</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" style="color: #f1f5f9; font-weight: 600;">
+              📝 运维详细备注 (Notes / Remarks):
+            </label>
+            <textarea id="metaNotes" class="form-control" rows="3" placeholder="例如：常驻3楼机房，配双千兆网卡，由运维组重点监控..." style="font-family: inherit; font-size: 12px; resize: vertical;">${u(o)}</textarea>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" style="color: #f1f5f9; font-weight: 600;">
+              🏷️ 分组标签 (Tags, 多个以英文或中文逗号分隔):
+            </label>
+            <input type="text" id="metaTags" class="form-control" placeholder="例如：财务, Win11, 关键资产, 双网卡" value="${u(a)}" style="font-size: 12.5px;">
+          </div>
+
+          <div id="metaSaveResult"></div>
+
+          <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px;">
+            <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+            <button class="btn btn-success" onclick="saveTerminalMeta('${u(e)}')">💾 保存更改并即时生效</button>
+          </div>
+        </div>
+      `;v(`✏️ 编辑终端资产信息 · [${u(e)}]`,l)}async function Se(e){const t=r("metaCustomName")?.value?.trim()||"",n=r("metaNotes")?.value?.trim()||"",o=r("metaTags")?.value?.trim()||"",a=ve(o),i=r("metaSaveResult");i&&(i.innerHTML='<div style="color: var(--primary); font-size: 12px;">正在保存持久化配置到服务端...</div>');try{const p=await(await y(f.terminalMeta(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({custom_name:t,notes:n,tags:a})})).json();p.success?(await P(),F()):i&&(i.innerHTML=`<div style="color: var(--danger); font-size: 12px;">保存失败: ${p.error||"未知错误"}</div>`)}catch(l){i&&(i.innerHTML=`<div style="color: var(--danger); font-size: 12px;">请求异常: ${l.message}</div>`)}}async function Te(e){if(confirm(`确定要从平台注销并删除离线终端 [${e}] 的资产记录吗？`))try{const n=await(await y(f.terminal(e),{method:"DELETE"})).json();n.success?await P():alert(`删除失败: ${n.error||"未知错误"}`)}catch(t){alert(`请求异常: ${t.message}`)}}async function Ce(e){v(`终端 [${e}] - 完整硬件概况`,"<pre>正在查询目标机器完整硬件及网络指标...</pre>");try{const n=await(await y(f.invoke(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tool:"get_system_overview",arguments:{}})})).json();n.success?v(`终端 [${e}] - 完整硬件概况`,`<pre>${JSON.stringify(n.result,null,2)}</pre>`):v("查询失败",`<pre style="color: var(--danger)">${n.error||"Unknown error"}</pre>`)}catch(t){v("请求错误",`<pre style="color: var(--danger)">${t.message}</pre>`)}}async function _e(e){v(`终端 [${e}] - 实时屏幕截图`,"<pre>正在请求屏幕截图...</pre>");try{const n=await(await y(f.invoke(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tool:"capture_screen",arguments:{quality:80}})})).json(),o=n.result?.base64_data||n.result?.image_base64||"";if(n.success&&o){const a=o.startsWith("data:")?o:`data:image/jpeg;base64,${o}`,i=n.result.width||"",l=n.result.height||"",p=i&&l?` (${i} × ${l})`:"",g=`
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <span style="font-size: 12px; color: var(--text-muted);">分辨率: <b>${i} × ${l}</b></span>
+              <div style="display: flex; gap: 8px;">
+                <a href="${a}" target="_blank" class="btn btn-secondary btn-sm">🔗 查看原图</a>
+                <button class="btn btn-sm" onclick="runScreenshot('${e}')">🔄 重新截取</button>
+              </div>
+            </div>
+            <img src="${a}" class="screenshot-img" alt="Screenshot" />
+          `;v(`终端 [${e}] - 屏幕截图${p}`,g)}else v("截图失败",`<pre style="color: var(--danger)">${n.error||JSON.stringify(n.result,null,2)}</pre>`)}catch(t){v("截图错误",`<pre style="color: var(--danger)">${t.message}</pre>`)}}async function J(e){v(`终端 [${e}] - 进程管理器`,"<pre>正在加载运行进程列表...</pre>");try{const n=await(await y(f.invoke(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tool:"list_processes",arguments:{limit:60,sort_by:"memory"}})})).json();if(!n.success){v("查询失败",`<pre style="color: var(--danger)">${n.error}</pre>`);return}const o=Array.isArray(n.result)?n.result:[];let a=`
+          <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+            <input type="text" id="procFilterInput" class="form-control" placeholder="🔍 快速过滤进程名称或 PID..." oninput="filterProcTable()" style="max-width: 320px;">
+            <div style="font-size: 12px; color: var(--text-muted);">共 ${o.length} 个进程 (按内存占用降序)</div>
+          </div>
+          <div style="max-height: 55vh; overflow-y: auto; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;">
+            <table class="data-table" id="procTable">
+              <thead>
+                <tr>
+                  <th style="width: 80px;">PID</th>
+                  <th>进程名称</th>
+                  <th style="width: 110px;">内存 (MB)</th>
+                  <th style="width: 90px;">CPU (%)</th>
+                  <th style="width: 90px; text-align: right;">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+        `;a+=o.map(i=>ge(e,i)).join(""),a+=`
+              </tbody>
+            </table>
+          </div>
+        `,v(`终端 [${e}] - 进程管理器`,a)}catch(t){v("请求错误",`<pre style="color: var(--danger)">${t.message}</pre>`)}}function Le(){const e=(r("procFilterInput")?.value||"").toLowerCase().trim();D(".proc-row").forEach(n=>{const o=n.getAttribute("data-name")||"",a=n.getAttribute("data-pid")||"";!e||o.includes(e)||a.includes(e)?n.style.display="":n.style.display="none"})}async function Pe(e,t,n){if(confirm(`确定要强制终止终端 [${e}] 上的进程 ${n} (PID: ${t}) 吗？`))try{const a=await(await y(f.invoke(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tool:"kill_process",arguments:{pid:t,force:!0}})})).json();a.success?(alert(`已终止进程 ${n} (${t})`),J(e)):alert(`终止失败: ${a.error}`)}catch(o){alert(`请求异常: ${o.message}`)}}function Ae(e){const n=`
+        <div class="form-group">
+          <label class="form-label">选择常用系统服务:</label>
+          <select id="commonSvcSelect" class="form-control" onchange="document.getElementById('customSvcInput').value = this.value">
+            <option value="">-- 请选择常见系统服务 --</option>
+            ${[{name:"Spooler",desc:"Print Spooler (打印服务)"},{name:"wuauserv",desc:"Windows Update (自动更新)"},{name:"LanmanServer",desc:"Server (文件共享)"},{name:"EventLog",desc:"Windows Event Log (事件日志)"},{name:"Winmgmt",desc:"WMI (系统管理规范)"},{name:"Dhcp",desc:"DHCP Client (动态网络寻址)"},{name:"Dnscache",desc:"DNS Client (域名解析缓存)"}].map(o=>`<option value="${o.name}">${o.name} - ${o.desc}</option>`).join("")}
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">服务系统名称 (Service Name):</label>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="customSvcInput" class="form-control" placeholder="例如: Spooler, wuauserv..." value="Spooler">
+            <button class="btn btn-secondary" onclick="querySvcStatus('${e}')">🔍 查询状态</button>
+          </div>
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 14px;">
+          <button class="btn btn-success" onclick="executeSvcAction('${e}', 'start')">▶ 启动服务</button>
+          <button class="btn btn-secondary" onclick="executeSvcAction('${e}', 'restart')">🔄 重启服务</button>
+          <button class="btn btn-danger" onclick="executeSvcAction('${e}', 'stop')">⏹ 停止服务</button>
+        </div>
+        <div id="svcResultBox" style="margin-top: 16px;">
+          <pre>输入服务名并点击【查询状态】查看详情...</pre>
+        </div>
+      `;v(`终端 [${e}] - 系统服务管理`,n)}async function G(e){const t=r("customSvcInput")?.value?.trim();if(!t)return alert("请输入服务名称");const n=r("svcResultBox");n.innerHTML="<pre>正在查询服务状态...</pre>";try{const a=await(await y(f.invoke(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tool:"manage_service",arguments:{service_name:t,action:"status"}})})).json();if(a.success){const i=a.result,l=i.status==="Running"||i.status==="active"?"var(--success)":"var(--warning)";n.innerHTML=`
+            <div style="background: #080c14; padding: 14px; border-radius: 8px; border: 1px solid var(--card-border);">
+              <div style="margin-bottom: 6px;">服务名称: <b>${i.name}</b> (${i.display_name||"-"})</div>
+              <div style="margin-bottom: 6px;">运行状态: <b style="color: ${l}">${i.status}</b></div>
+              <div style="margin-bottom: 6px;">启动类型: <b>${i.start_type||"-"}</b></div>
+              <div style="font-size: 12px; color: var(--text-muted);">${i.message||""}</div>
+            </div>
+          `}else n.innerHTML=`<pre style="color: var(--danger)">${a.error}</pre>`}catch(o){n.innerHTML=`<pre style="color: var(--danger)">${o.message}</pre>`}}async function De(e,t){const n=r("customSvcInput")?.value?.trim();if(!n)return alert("请输入服务名称");if(!confirm(`确定要在终端 [${e}] 上对服务 [${n}] 执行 [${t}] 操作吗？`))return;const o=r("svcResultBox");o.innerHTML=`<pre>正在执行 ${t}...</pre>`;try{const i=await(await y(f.invoke(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tool:"manage_service",arguments:{service_name:n,action:t}})})).json();i.success?(alert(`服务 ${n} ${t} 操作成功`),G(e)):o.innerHTML=`<pre style="color: var(--danger)">操作失败: ${i.error}</pre>`}catch(a){o.innerHTML=`<pre style="color: var(--danger)">请求异常: ${a.message}</pre>`}}function Oe(e){const n=`
+        <div class="form-group">
+          <label class="form-label">常用排障预设脚本 (Preset Runbooks):</label>
+          <select id="cmdPresetSelect" class="form-control" onchange="document.getElementById('cmdScriptArea').value = this.value">
+            <option value="Get-Process | Select-Object -First 5">-- 自定义 PowerShell 脚本 --</option>
+            ${[{label:"排查 1: 查看所有网卡与IP配置",cmd:"Get-NetIPAddress | Format-Table InterfaceAlias, IPAddress, AddressFamily"},{label:"排查 2: 查看本机所有监听端口 (Listen)",cmd:"Get-NetTCPConnection -State Listen | Select-Object LocalAddress, LocalPort, OwningProcess -First 15 | Format-Table"},{label:"排查 3: 检查所有磁盘可用空间",cmd:"Get-PSDrive -PSProvider 'FileSystem' | Select-Object Name, @{Name='UsedGB';Expression={[math]::Round($_.Used/1GB,2)}}, @{Name='FreeGB';Expression={[math]::Round($_.Free/1GB,2)}}"},{label:"排查 4: 内存占用 Top 8 进程",cmd:"Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 8 Name, Id, @{Name='MemoryMB';Expression={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table"},{label:"排查 5: 查看系统近24小时重要错误事件",cmd:"Get-EventLog -LogName System -EntryType Error,Warning -Newest 6 | Format-Table TimeGenerated, Source, EventID, Message -AutoSize"}].map(o=>`<option value="${o.cmd.replace(/"/g,"&quot;")}">${o.label}</option>`).join("")}
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">PowerShell 脚本内容:</label>
+          <textarea id="cmdScriptArea" class="form-control" rows="6" style="resize: vertical;">Get-Process | Select-Object -First 5</textarea>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted);">
+            超时时间: <input type="number" id="cmdTimeout" class="form-control" value="30" style="width: 70px;"> 秒
+          </div>
+          <button class="btn" onclick="executeCommand('${e}')">⚡ 立即在后台静默执行</button>
+        </div>
+        <div id="cmdOutputBox" style="margin-top: 16px;"></div>
+      `;v(`终端 [${e}] - 执行运维诊断命令`,n)}async function je(e){const t=r("cancelCmdBtn");t&&(t.disabled=!0,t.innerText="正在终止...");try{const n=await y(f.terminalCalls(e));if(n.ok){const i=(await n.json()).calls||[];if(i.length>0)for(const l of i)await y(f.cancelCall(l.call_id),{method:"POST"})}const o=r("cmdPreOutput");o&&(o.innerText="已下发终止信号，正在强制杀除目标机器进程树并回收资源...")}catch(n){console.error("Cancel command failed:",n)}}async function Ee(e){const t=r("cmdScriptArea")?.value;if(!t)return alert("请输入脚本内容");const n=parseInt(r("cmdTimeout")?.value||"30",10),o=r("cmdOutputBox");let a=0;o.innerHTML=`
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding: 8px 12px; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 6px;">
+          <div style="display: flex; align-items: center; gap: 8px; color: var(--warning); font-size: 12.5px;">
+            <span class="dot pulse" style="background: var(--warning); box-shadow: 0 0 8px var(--warning);"></span>
+            <span>正在目标终端后台静默执行中... (<b id="cmdTimer">0</b>s)</span>
+          </div>
+          <button id="cancelCmdBtn" class="btn btn-sm" style="background: var(--danger); color: #fff; padding: 4px 10px; font-weight: 600;" onclick="cancelTerminalCmd('${e}')">⏹ 终止任务</button>
+        </div>
+        <pre id="cmdPreOutput" style="opacity: 0.8; font-size: 12px;">命令已下发至终端，等待返回输出...</pre>
+      `,m.activeCmdCancelPoll&&clearInterval(m.activeCmdCancelPoll),m.activeCmdCancelPoll=setInterval(()=>{a+=1;const i=r("cmdTimer");i&&(i.innerText=String(a)),_()},1e3);try{const l=await(await y(f.invoke(e),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tool:"exec_powershell",arguments:{script:t,timeout_secs:n},timeout_secs:n})})).json();if(m.activeCmdCancelPoll&&clearInterval(m.activeCmdCancelPoll),m.activeCmdCancelPoll=null,_(),l.success){const p=l.result?.exit_code,g=l.result?.stdout||"(标准输出为空)",x=l.result?.stderr?`
+
+[STDERR]:
+${l.result.stderr}`:"",c=p===0?"color: var(--success);":"color: var(--danger);";o.innerHTML=`
+            <div style="font-size: 12px; margin-bottom: 6px;">耗时: <b>${l.result?.duration_ms||a*1e3}ms</b> | 退出代码: <b style="${c}">${p}</b></div>
+            <pre>${g}${x}</pre>
+          `}else{const g=(l.error||"").toLowerCase().includes("cancel")?"⏹ 任务已被主动终止 (已强制杀除目标进程树)":`执行失败: ${l.error}`;o.innerHTML=`<pre style="color: var(--danger); font-weight: 600;">${g}</pre>`}}catch(i){m.activeCmdCancelPoll&&clearInterval(m.activeCmdCancelPoll),m.activeCmdCancelPoll=null,_(),o.innerHTML=`<pre style="color: var(--danger)">请求异常: ${i.message}</pre>`}}function Fe(){m.terminalsData=[];const e=r("terminalGrid");e&&(e.innerHTML=`
+            <div class="empty-state">
+              <h3>🔐 请先输入访问凭据</h3>
+              <p style="margin-top: 8px; font-size: 13px;">服务端已开启鉴权保护，验证通过后方可加载拓扑设备</p>
+              <button class="btn btn-primary btn-sm" style="margin-top: 14px;" onclick="showAuthModal()">输入访问凭据</button>
+            </div>
+          `),q()}function q(){const e=r("authTokenInput");e&&(e.value=U()),ie()}async function He(){const t=r("authTokenInput")?.value?.trim();if(!t)return;Z(t);const n=await y(f.terminals());if(n.ok){const o=r("authErrorMsg");o&&(o.style.display="none"),re(),m.terminalsData=await n.json(),O()}else{const o=r("authErrorMsg");o&&(o.style.display="block")}}function ze(){const t=`http://${window.location.host}/sse`,n=JSON.stringify({mcpServers:{"at-pc-central":{url:t}}},null,2);navigator.clipboard.writeText(n).then(()=>{const o=r("mcpConfigBtn");if(o){const a=o.innerText;o.innerText="✓ 已复制配置",setTimeout(()=>{o.innerText=a},1500)}}).catch(()=>{}),v("AI Agent MCP 配置 JSON (已复制剪贴板)",`<p style="margin-bottom: 10px; font-size: 12.5px; color: var(--text-muted);">已将配置写入剪贴板，可直接粘贴至 Cursor 或 Claude 的 mcp.json：</p><pre>${n}</pre>`)}function Ne(){Object.assign(window,{showAuthModal:q,submitAuthToken:He,showMcpConfigModal:ze,closeModal:F,fetchTerminals:P,renderCards:O,setFilterTab:Me,showRunningCallsModal:W,cancelRunningCall:$e,openEditMetaModal:ke,saveTerminalMeta:Se,deleteOfflineTerminal:Te,runOverview:Ce,runScreenshot:_e,runProcessManager:J,filterProcTable:Le,killTargetProc:Pe,runServiceManager:Ae,querySvcStatus:G,executeSvcAction:De,openCommandModal:Oe,cancelTerminalCmd:je,executeCommand:Ee,openRemoteDesktop:ue,setCursorMode:le,setScaleMode:ce,releaseAllInputs:H,injectSpecialKey:de,switchStreamDisplay:pe,toggleCanvasFullscreen:fe,stopAndCloseDesktop:z,checkModifierCursor:$})}function Ue(){se(Fe),ae(()=>{s.currentStreamTid&&z()}),ye(),Ne(),window.onclick=function(e){e.target?.id==="resultModal"&&F()},P(),setInterval(P,2e3)}Ue();
+</script>
+  <style>:root{--bg: #0b0f19;--surface: #111622;--card-bg: rgba(21, 28, 44, .75);--card-border: rgba(255, 255, 255, .07);--card-hover-border: rgba(56, 189, 248, .35);--text: #f8fafc;--text-muted: #94a3b8;--text-dim: #64748b;--primary: #38bdf8;--primary-hover: #0284c7;--success: #10b981;--warning: #f59e0b;--danger: #f43f5e;--accent-gradient: linear-gradient(135deg, #0284c7, #38bdf8)}*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif}body{background-color:var(--bg);background-image:radial-gradient(circle at 50% 0%,rgba(56,189,248,.06) 0%,transparent 60%);color:var(--text);padding:24px;min-height:100vh;line-height:1.5}.container{max-width:1240px;margin:0 auto}::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#94a3b833;border-radius:9999px}::-webkit-scrollbar-thumb:hover{background:#94a3b866}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid var(--card-border);gap:16px;flex-wrap:wrap}.logo-area{display:flex;align-items:center;gap:14px}.logo-box{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#0284c7,#38bdf8);padding:1px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px #38bdf840}.logo-inner{width:100%;height:100%;background:#0d1320;border-radius:11px;display:flex;align-items:center;justify-content:center;font-weight:900;color:var(--primary);font-size:18px}.title-box h1{font-size:20px;font-weight:700;letter-spacing:-.01em;color:#fff;display:flex;align-items:center;gap:8px}.version-tag{font-size:10px;padding:2px 7px;background:#38bdf81f;color:var(--primary);border:1px solid rgba(56,189,248,.25);border-radius:9999px;font-weight:600}.title-box p{font-size:12px;color:var(--text-muted);margin-top:2px}.status-tags{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tag{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:9999px;background:#111827cc;border:1px solid var(--card-border);font-size:12px;color:var(--text-muted)}.dot{width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 8px var(--success)}.dot.pulse{animation:pulseGlow 2s infinite}@keyframes pulseGlow{0%,to{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(.85)}}.btn{background:var(--primary);color:#0b0f19;border:none;padding:7px 14px;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;transition:all .15s ease;display:inline-flex;align-items:center;justify-content:center;gap:5px}.btn:hover{background:var(--primary-hover);transform:translateY(-1px)}.btn-secondary{background:#1e293bcc;color:var(--text);border:1px solid var(--card-border)}.btn-secondary:hover{background:#334155cc;border-color:#94a3b84d;color:#fff}.btn-sm{padding:5px 10px;font-size:11.5px;border-radius:6px}.btn-danger{background:var(--danger);color:#fff}.btn-danger:hover{background:#e11d48}.btn-success{background:var(--success);color:#0b0f19}.btn-success:hover{background:#059669}.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;gap:16px;flex-wrap:wrap}.search-wrap{display:flex;align-items:center;gap:12px;flex:1;max-width:580px}.search-box{position:relative;flex:1}.search-box input{width:100%;padding:8px 14px 8px 34px;background:#111827d9;border:1px solid var(--card-border);border-radius:8px;color:var(--text);font-size:13px;outline:none;transition:border-color .15s,box-shadow .15s}.search-box input:focus{border-color:var(--primary);box-shadow:0 0 0 3px #38bdf81f}.search-box svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-dim);pointer-events:none}.filter-tabs{display:flex;gap:2px;background:#0f172ad9;padding:3px;border-radius:8px;border:1px solid var(--card-border)}.filter-tab{padding:4px 10px;border-radius:6px;border:none;background:transparent;color:var(--text-muted);font-size:11.5px;font-weight:500;cursor:pointer;transition:all .15s}.filter-tab.active{background:#1e293be6;color:#fff;font-weight:600;box-shadow:0 1px 3px #0000004d}.meta-summary{font-size:12.5px;color:var(--text-muted);display:flex;align-items:center;gap:8px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:20px}.card{background:var(--card-bg);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--card-border);border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:14px;transition:all .2s cubic-bezier(.16,1,.3,1);position:relative;overflow:hidden}.card:hover{border-color:var(--card-hover-border);transform:translateY(-2px);box-shadow:0 14px 30px -8px #0000008c}.card-header{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}.device-name{font-size:15px;font-weight:700;color:#fff;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}.edit-name-btn{background:#38bdf81a;border:1px solid rgba(56,189,248,.25);color:var(--primary);border-radius:6px;padding:1px 6px;font-size:11px;cursor:pointer;display:inline-flex;align-items:center;transition:all .15s}.edit-name-btn:hover{background:var(--primary);color:#0b0f19;transform:scale(1.05)}.hostname-sub{font-size:11.5px;color:var(--text-muted);margin-top:2px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}.unnamed-hint{font-size:10px;color:var(--text-dim);font-weight:400;background:#ffffff0d;padding:1px 5px;border-radius:4px}.tags-container{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.tag-pill{font-size:10.5px;padding:1px 7px;border-radius:9999px;background:#38bdf814;color:#7dd3fc;border:1px solid rgba(56,189,248,.2)}.note-box{font-size:11px;color:#cbd5e1;background:#0f172a99;border-left:3px solid var(--primary);padding:4px 8px;border-radius:0 4px 4px 0;margin-top:6px;word-break:break-all}.device-id{font-size:11px;color:var(--text-dim);font-family:ui-monospace,SFMono-Regular,monospace;margin-top:0}.badge-wrap{display:flex;align-items:center;gap:6px}.status-badge{font-size:10px;padding:3px 8px;border-radius:9999px;font-weight:600;text-transform:uppercase;letter-spacing:.02em}.status-badge.online{background:#10b9811f;color:var(--success);border:1px solid rgba(16,185,129,.3)}.status-badge.offline{background:#94a3b81a;color:var(--text-dim);border:1px solid rgba(148,163,184,.2)}.status-badge.high-load{background:#f59e0b26;color:var(--warning);border:1px solid rgba(245,158,11,.3)}.metrics{display:flex;flex-direction:column;gap:9px;background:#0b0f1999;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,.04)}.metric-row{display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:4px;color:var(--text-muted)}.metric-row b{color:#f1f5f9;font-family:ui-monospace,monospace}.progress-bar-bg{width:100%;height:6px;background:#1e293bb3;border-radius:9999px;overflow:hidden}.progress-bar-fill{height:100%;border-radius:9999px;transition:width .3s ease}.fill-emerald{background:linear-gradient(90deg,#10b981,#06b6d4)}.fill-amber{background:linear-gradient(90deg,#06b6d4,#f59e0b)}.fill-rose{background:linear-gradient(90deg,#f59e0b,#f43f5e)}.info-list{display:grid;grid-template-columns:1fr 1fr;gap:7px;font-size:11.5px;color:var(--text-muted)}.info-item b{color:#e2e8f0;font-weight:500}.card-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:auto;padding-top:10px;border-top:1px solid rgba(255,255,255,.05)}.btn-featured{grid-column:span 3;background:var(--accent-gradient);color:#0b0f19;font-weight:700;box-shadow:0 4px 12px #38bdf833}.btn-featured:hover{box-shadow:0 6px 16px #38bdf859}.modal-backdrop{display:none;position:fixed;inset:0;background:#050811d1;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);z-index:999;align-items:center;justify-content:center;padding:20px}.modal{background:#111726;border:1px solid rgba(255,255,255,.1);border-radius:14px;width:100%;max-width:820px;max-height:86vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 60px -12px #000000b3}.modal.modal-lg{max-width:1160px;width:96vw;max-height:94vh}.modal-header{padding:14px 20px;border-bottom:1px solid rgba(255,255,255,.07);display:flex;justify-content:space-between;align-items:center;background:#151d30}.modal-body{padding:18px 20px;overflow-y:auto;font-size:13px;line-height:1.55;color:#e2e8f0;background:#0e1422}.modal-footer{padding:12px 20px;border-top:1px solid rgba(255,255,255,.07);display:flex;justify-content:flex-end;gap:10px;background:#151d30}.close-btn{cursor:pointer;font-size:22px;color:var(--text-muted);background:none;border:none;line-height:1}.close-btn:hover{color:#fff}pre{background:#080c14;border:1px solid rgba(255,255,255,.06);padding:14px;border-radius:8px;overflow-x:auto;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px}.screenshot-img{width:100%;max-height:520px;object-fit:contain;border-radius:8px;border:1px solid var(--card-border)}.data-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}.data-table th,.data-table td{padding:9px 12px;text-align:left;border-bottom:1px solid rgba(255,255,255,.06)}.data-table th{background:#080c14;color:var(--text-muted);font-weight:600;position:sticky;top:0}.data-table tr:hover td{background:#38bdf80a}.form-group{margin-bottom:14px}.form-label{display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:var(--text-muted)}.form-control{width:100%;padding:8px 12px;background:#080c14;border:1px solid rgba(255,255,255,.08);border-radius:6px;color:var(--text);font-size:12.5px;outline:none;font-family:ui-monospace,monospace}.form-control:focus{border-color:var(--primary)}.rd-hud{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px;flex-wrap:wrap;background:#0f172ad9;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);padding:8px 12px;border-radius:8px;border:1px solid var(--card-border)}.rd-hud-section{display:flex;align-items:center;gap:8px;font-size:12px}.key-btn{padding:3px 8px;font-size:11px;border-radius:5px;background:#1e293be6;border:1px solid rgba(255,255,255,.1);color:#e2e8f0;cursor:pointer;transition:all .12s}.key-btn:hover{background:var(--primary);color:#0b0f19;font-weight:600}.cursor-tool-btn,.scale-tool-btn{padding:3px 8px;font-size:11px;border-radius:5px;background:#1e293bd9;border:1px solid rgba(255,255,255,.08);color:#cbd5e1;cursor:pointer;transition:all .12s;white-space:nowrap}.cursor-tool-btn:hover,.scale-tool-btn:hover{background:#334155f2;color:#fff}.cursor-tool-btn.active,.scale-tool-btn.active{background:var(--primary);color:#0b0f19;font-weight:700;border-color:var(--primary)}.empty-state{grid-column:1 / -1;padding:60px 20px;text-align:center;color:var(--text-muted);background:var(--card-bg);border-radius:12px;border:1px dashed var(--card-border)}.rd-main-wrapper{display:flex;flex-direction:column;width:100%;position:relative}.rd-canvas-container{position:relative;width:100%;height:72vh;min-height:500px;background:#050811;border-radius:8px;overflow:hidden;display:flex;justify-content:center;align-items:center;border:1px solid var(--card-border)}.rd-canvas{width:100%;height:100%;max-width:100%;max-height:100%;object-fit:contain;cursor:default;outline:none;display:block}#rdMainWrapper:fullscreen{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;background:#050811!important;border-radius:0!important;border:none!important;padding:0!important;margin:0!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;position:fixed!important;inset:0!important;z-index:99999!important}#rdMainWrapper:fullscreen .rd-hud{position:absolute!important;top:12px!important;left:50%!important;transform:translate(-50%)!important;z-index:100000!important;max-width:96vw!important;background:#0b0f19eb!important;-webkit-backdrop-filter:blur(16px)!important;backdrop-filter:blur(16px)!important;border:1px solid rgba(56,189,248,.3)!important;box-shadow:0 10px 30px #000000bf!important;opacity:.95;transition:opacity .2s ease}#rdMainWrapper:fullscreen .rd-hud:hover{opacity:1!important}#rdMainWrapper:fullscreen .rd-canvas-container{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;border-radius:0!important;border:none!important}#rdMainWrapper:fullscreen .rd-canvas{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important}#rdMainWrapper:fullscreen .rd-bottom-bar{display:none!important}
+</style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="logo-area">
+        <div class="logo-box">
+          <div class="logo-inner">PC</div>
+        </div>
+        <div class="title-box">
+          <h1>
+            <span>AT-PC 集中管控平台</span>
+            <span class="version-tag">Obsidian v1.0.0</span>
+          </h1>
+          <p>Multi-Terminal MCP Remote Gateway & Dynamic Fleet Hub</p>
+        </div>
+      </div>
+      <div class="status-tags">
+        <div class="tag"><div class="dot pulse"></div> <span>网关就绪</span></div>
+        <div class="tag">WS: <b style="color: #38bdf8;">9801</b></div>
+        <div class="tag">MCP: <b style="color: #38bdf8;">9800</b></div>
+        <button id="runningCallsBtn" class="btn btn-secondary btn-sm" onclick="showRunningCallsModal()" style="display: none; align-items: center; gap: 6px; color: #f59e0b; border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1);">
+          <span class="dot pulse" style="background: #f59e0b; box-shadow: 0 0 8px #f59e0b;"></span>
+          <span>⚡ 运行中任务 (<b id="runningCallsCount">0</b>)</span>
+        </button>
+        <button id="mcpConfigBtn" class="btn btn-secondary btn-sm" onclick="showMcpConfigModal()">📋 复制 MCP 配置</button>
+      </div>
+    </header>
+
+    <!-- Toolbar & Filter Tabs -->
+    <div class="toolbar">
+      <div class="search-wrap">
+        <div class="search-box">
+          <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+          <input type="text" id="searchInput" placeholder="快速检索主机名、局域网 IP、终端 ID、系统版本..." oninput="renderCards()">
+        </div>
+        <div class="filter-tabs">
+          <button class="filter-tab active" onclick="setFilterTab('all', this)">全部</button>
+          <button class="filter-tab" onclick="setFilterTab('online', this)">🟢 在线</button>
+          <button class="filter-tab" onclick="setFilterTab('warn', this)">⚠️ 高负载</button>
+          <button class="filter-tab" onclick="setFilterTab('offline', this)">⚪ 离线</button>
+        </div>
+      </div>
+      
+      <div class="meta-summary">
+        <span>在线终端: <b id="onlineCount" style="color: var(--success); font-size: 15px;">0</b> / 总计: <span id="totalCount">0</span></span>
+        <button class="btn btn-secondary btn-sm" onclick="fetchTerminals()" title="立即同步设备状态">🔄 刷新</button>
+      </div>
+    </div>
+
+    <!-- Terminal Cards Grid -->
+    <div id="terminalGrid" class="grid">
+      <div class="empty-state">
+        <h3>正在加载终端列表...</h3>
+        <p style="margin-top: 8px; font-size: 13px;">请稍候，系统正在从服务端获取在线设备</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auth Modal -->
+  <div id="authModal" class="modal-backdrop" style="display: none; z-index: 10000;">
+    <div class="modal" style="max-width: 440px;">
+      <div class="modal-header">
+        <h3 style="font-size: 15px; font-weight: 700; color: #fff;">🔐 访问凭据认证</h3>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">服务端已开启鉴权保护，请输入访问令牌 (Token) 以获取终端拓扑与执行控制操作：</p>
+        <input type="password" id="authTokenInput" class="form-input" placeholder="输入访问 Token / PIN" style="width: 100%; padding: 10px 12px; font-size: 14px; background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); color: #fff; border-radius: 6px; outline: none;" onkeydown="if(event.key==='Enter') submitAuthToken()">
+        <div id="authErrorMsg" style="color: var(--danger); font-size: 12px; margin-top: 8px; display: none;">认证失败：Token 无效或已过期</div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button class="btn btn-primary btn-sm" onclick="submitAuthToken()">确认验证</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Result Modal -->
+  <div id="resultModal" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle" style="font-size: 15px; font-weight: 700; color: #fff;">诊断结果</h3>
+        <button class="close-btn" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="modalContent">
+        <pre>加载中...</pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" onclick="closeModal()">关闭窗口</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

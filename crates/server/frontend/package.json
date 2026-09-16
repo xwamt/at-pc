@@ -1,0 +1,20 @@
+{
+  "name": "at-pc-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node --test tests/api.test.js tests/desktop.test.js tests/terminals.test.js tests/typecheck-guard.test.js",
+    "lint": "eslint src tests vite.config.js",
+    "typecheck": "tsc --noEmit -p jsconfig.json"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "eslint": "^9.35.0",
+    "globals": "^16.3.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}

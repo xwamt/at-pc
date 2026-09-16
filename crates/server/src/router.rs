@@ -1,80 +1,28 @@
+use base64::Engine;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{oneshot, RwLock};
 use tracing::{debug, info};
-use serde_json::Value;
 
-use at_pc_protocol::messages::{AgentToServerMessage, ServerToAgentMessage};
-use at_pc_protocol::models::TerminalStatus;
 use crate::ws::handler::AgentMessageHandler;
 use crate::ws::registry::{TerminalEntry, TerminalRegistry};
+use at_pc_protocol::messages::{AgentToServerMessage, ServerToAgentMessage};
+use at_pc_protocol::models::TerminalStatus;
+use at_pc_protocol::tools::agent_tool;
 
 static CALL_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Generates a globally unique call ID for requests and audits
 pub fn generate_call_id() -> String {
     let call_seq = CALL_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("call-{}-{}", chrono::Utc::now().timestamp_millis(), call_seq)
-}
-
-/// RBAC Tool Permission Categories
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ToolPermission {
-    ReadOnly,
-    Diagnostic,
-    ComputerUse,
-    Admin,
-}
-
-/// Resolves permission tier category for a given tool name
-pub fn get_tool_permission(tool_name: &str) -> ToolPermission {
-    match tool_name {
-        "list_terminals"
-        | "select_terminal"
-        | "get_active_terminal"
-        | "list_pending_calls"
-        | "get_system_overview"
-        | "list_processes"
-        | "read_text_file"
-        | "capture_screen"
-        | "list_monitors"
-        | "get_marked_screen"
-        | "list_directory"
-        | "search_files"
-        | "list_network_connections"
-        | "test_network"
-        | "get_event_logs"
-        | "get_ui_tree" => ToolPermission::ReadOnly,
-
-        "mouse_click"
-        | "mouse_move"
-        | "mouse_drag"
-        | "mouse_scroll"
-        | "type_text"
-        | "press_key"
-        | "key_down"
-        | "key_up"
-        | "hotkey"
-        | "click_element"
-        | "set_element_text"
-        | "click_mark"
-        | "list_windows"
-        | "focus_window"
-        | "close_window"
-        | "batch_actions" => ToolPermission::ComputerUse,
-
-        "exec_powershell"
-        | "exec_cmd"
-        | "kill_process"
-        | "manage_service"
-        | "write_text_file"
-        | "rename_terminal"
-        | "cancel_tool" => ToolPermission::Admin,
-
-        _ => ToolPermission::Admin,
-    }
+    format!(
+        "call-{}-{}",
+        chrono::Utc::now().timestamp_millis(),
+        call_seq
+    )
 }
 
 /// Cached desktop video frame for remote desktop viewing
@@ -190,7 +138,10 @@ impl McpRouter {
     }
 
     /// Set the active target terminal ID for this session (supports terminal_id or custom_name)
-    pub async fn select_terminal(&self, terminal_id_or_name: &str) -> Result<TerminalEntry, String> {
+    pub async fn select_terminal(
+        &self,
+        terminal_id_or_name: &str,
+    ) -> Result<TerminalEntry, String> {
         let entry = self
             .find_terminal(terminal_id_or_name)
             .await
@@ -204,7 +155,10 @@ impl McpRouter {
         let actual_tid = entry.info.terminal_id.clone();
         let mut active = self.active_terminal_id.write().await;
         *active = Some(actual_tid.clone());
-        info!("Active terminal set to: {} (input: {})", actual_tid, terminal_id_or_name);
+        info!(
+            "Active terminal set to: {} (input: {})",
+            actual_tid, terminal_id_or_name
+        );
         Ok(entry)
     }
 
@@ -241,7 +195,10 @@ impl McpRouter {
     }
 
     /// Get the active terminal ID for a specific session, falling back to global active terminal
-    pub async fn get_active_terminal_id_for_session(&self, session_id: Option<&str>) -> Option<String> {
+    pub async fn get_active_terminal_id_for_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<String> {
         if let Some(sid) = session_id {
             let sessions = self.session_active_terminals.read().await;
             if let Some(tid) = sessions.get(sid) {
@@ -268,8 +225,12 @@ impl McpRouter {
     /// 2. Otherwise uses session `active_terminal_id`.
     /// 3. If no active terminal is set, falls back to the single online terminal if exactly 1 exists.
     /// 4. Otherwise returns an informative error.
-    pub async fn resolve_target_terminal(&self, explicit_id: Option<&str>) -> Result<String, String> {
-        self.resolve_target_terminal_with_session(explicit_id, None).await
+    pub async fn resolve_target_terminal(
+        &self,
+        explicit_id: Option<&str>,
+    ) -> Result<String, String> {
+        self.resolve_target_terminal_with_session(explicit_id, None)
+            .await
     }
 
     /// Resolves target terminal for a tool call taking session ID into account:
@@ -356,7 +317,10 @@ impl McpRouter {
         if let Err(e) = self.registry.send_to_terminal(terminal_id, msg).await {
             let mut pending = self.pending_calls.lock().unwrap();
             pending.remove(&call_id);
-            return Err(format!("Failed to send tool invocation to terminal '{}': {}", terminal_id, e));
+            return Err(format!(
+                "Failed to send tool invocation to terminal '{}': {}",
+                terminal_id, e
+            ));
         }
 
         match tokio::time::timeout(Duration::from_secs(effective_timeout), rx).await {
@@ -371,10 +335,15 @@ impl McpRouter {
                     pending.remove(&call_id);
                 }
                 // Send best-effort CancelTool
-                let _ = self.registry.send_to_terminal(
-                    terminal_id,
-                    ServerToAgentMessage::CancelTool { call_id: call_id.clone() },
-                ).await;
+                let _ = self
+                    .registry
+                    .send_to_terminal(
+                        terminal_id,
+                        ServerToAgentMessage::CancelTool {
+                            call_id: call_id.clone(),
+                        },
+                    )
+                    .await;
 
                 Err(format!(
                     "Tool '{}' execution timed out after {}s on terminal '{}'",
@@ -389,7 +358,10 @@ impl McpRouter {
         let entry = {
             let mut pending = self.pending_calls.lock().unwrap();
             pending.remove(call_id).ok_or_else(|| {
-                format!("Pending tool call '{}' not found or already completed", call_id)
+                format!(
+                    "Pending tool call '{}' not found or already completed",
+                    call_id
+                )
             })?
         };
 
@@ -397,12 +369,26 @@ impl McpRouter {
             call_id: call_id.to_string(),
         };
 
-        if let Err(e) = self.registry.send_to_terminal(&entry.terminal_id, msg).await {
-            tracing::warn!("Failed to send CancelTool message to terminal '{}': {}", entry.terminal_id, e);
+        if let Err(e) = self
+            .registry
+            .send_to_terminal(&entry.terminal_id, msg)
+            .await
+        {
+            tracing::warn!(
+                "Failed to send CancelTool message to terminal '{}': {}",
+                entry.terminal_id,
+                e
+            );
         }
 
-        let _ = entry.tx.send(Err(format!("Tool execution was cancelled for call '{}'", call_id)));
-        info!("Cancelled in-flight tool call [{}] on terminal [{}]", call_id, entry.terminal_id);
+        let _ = entry.tx.send(Err(format!(
+            "Tool execution was cancelled for call '{}'",
+            call_id
+        )));
+        info!(
+            "Cancelled in-flight tool call [{}] on terminal [{}]",
+            call_id, entry.terminal_id
+        );
         Ok(())
     }
 
@@ -444,7 +430,10 @@ impl McpRouter {
     }
 
     /// Lists rich details of active in-flight pending calls, optionally filtered by terminal ID
-    pub fn list_pending_call_details(&self, filter_terminal_id: Option<&str>) -> Vec<PendingCallDetail> {
+    pub fn list_pending_call_details(
+        &self,
+        filter_terminal_id: Option<&str>,
+    ) -> Vec<PendingCallDetail> {
         let pending = self.pending_calls.lock().unwrap();
         let mut list: Vec<PendingCallDetail> = pending
             .iter()
@@ -488,7 +477,10 @@ impl McpRouter {
                     let _ = tx.send(Err(err));
                 }
             } else {
-                debug!("Received ToolResult for unknown or expired call [{}]", call_id);
+                debug!(
+                    "Received ToolResult for unknown or expired call [{}]",
+                    call_id
+                );
             }
         }
     }
@@ -499,8 +491,13 @@ impl McpRouter {
     }
 
     /// Dispatches any MCP tool call (server meta-tools or forwarded diagnostic tools)
-    pub async fn dispatch_tool_call(&self, tool_name: &str, arguments: Value) -> Result<Value, String> {
-        self.dispatch_tool_call_with_role(tool_name, arguments, None, None, None, None).await
+    pub async fn dispatch_tool_call(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        self.dispatch_tool_call_with_role(tool_name, arguments, None, None, None, None)
+            .await
     }
 
     /// Dispatches any MCP tool call with optional session isolation context
@@ -510,7 +507,8 @@ impl McpRouter {
         arguments: Value,
         session_id: Option<&str>,
     ) -> Result<Value, String> {
-        self.dispatch_tool_call_with_role(tool_name, arguments, session_id, None, None, None).await
+        self.dispatch_tool_call_with_role(tool_name, arguments, session_id, None, None, None)
+            .await
     }
 
     /// Dispatches any MCP tool call with RBAC permission enforcement and persistent audit logging
@@ -531,76 +529,94 @@ impl McpRouter {
         let target_tid = if explicit_tid.is_some() {
             explicit_tid.clone()
         } else {
-            self.resolve_target_terminal_with_session(None, session_id).await.ok()
+            self.resolve_target_terminal_with_session(None, session_id)
+                .await
+                .ok()
         };
 
         // 1. Enforce RBAC permission if role is specified
         if let Some(r) = role {
             if !crate::config::is_tool_allowed_for_role(r, tool_name) {
-                let err_msg = format!("Forbidden: Role '{}' is not authorized to execute tool '{}'", r, tool_name);
+                let err_msg = format!(
+                    "Forbidden: Role '{}' is not authorized to execute tool '{}'",
+                    r, tool_name
+                );
                 if let Some(ref logger) = self.audit_logger {
-                    logger.log(crate::audit::AuditRecord {
-                        id: format!("audit-{}", generate_call_id()),
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                        role: Some(r.to_string()),
-                        token_prefix: token_prefix.map(|s| s.to_string()),
-                        client_ip: client_ip.map(|s| s.to_string()),
-                        terminal_id: target_tid.clone(),
-                        action: format!("tool:{}", tool_name),
-                        tool_name: Some(tool_name.to_string()),
-                        arguments: Some(arguments.clone()),
-                        status: "DENIED".to_string(),
-                        error: Some(err_msg.clone()),
-                        duration_ms: Some(0),
-                    });
+                    logger
+                        .log_async(crate::audit::AuditRecord {
+                            id: format!("audit-{}", generate_call_id()),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            role: Some(r.to_string()),
+                            token_prefix: token_prefix.map(|s| s.to_string()),
+                            client_ip: client_ip.map(|s| s.to_string()),
+                            terminal_id: target_tid.clone(),
+                            action: format!("tool:{}", tool_name),
+                            tool_name: Some(tool_name.to_string()),
+                            arguments: Some(arguments.clone()),
+                            status: "DENIED".to_string(),
+                            error: Some(err_msg.clone()),
+                            duration_ms: Some(0),
+                        })
+                        .await;
                 }
                 return Err(err_msg);
             }
         }
 
         let start_time = std::time::Instant::now();
-        let result = self.execute_dispatch_inner(tool_name, arguments.clone(), session_id).await;
+        let result = self
+            .execute_dispatch_inner(tool_name, arguments.clone(), session_id)
+            .await;
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
 
         // 2. Persistent audit trail
         if let Some(ref logger) = self.audit_logger {
             match &result {
                 Ok(_) => {
-                    logger.log(crate::audit::AuditRecord {
-                        id: format!("audit-{}", generate_call_id()),
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                        role: role.map(|r| r.to_string()),
-                        token_prefix: token_prefix.map(|s| s.to_string()),
-                        client_ip: client_ip.map(|s| s.to_string()),
-                        terminal_id: target_tid.clone(),
-                        action: format!("tool:{}", tool_name),
-                        tool_name: Some(tool_name.to_string()),
-                        arguments: Some(arguments),
-                        status: "SUCCESS".to_string(),
-                        error: None,
-                        duration_ms: Some(elapsed_ms),
-                    });
+                    logger
+                        .log_async(crate::audit::AuditRecord {
+                            id: format!("audit-{}", generate_call_id()),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            role: role.map(|r| r.to_string()),
+                            token_prefix: token_prefix.map(|s| s.to_string()),
+                            client_ip: client_ip.map(|s| s.to_string()),
+                            terminal_id: target_tid.clone(),
+                            action: format!("tool:{}", tool_name),
+                            tool_name: Some(tool_name.to_string()),
+                            arguments: Some(arguments),
+                            status: "SUCCESS".to_string(),
+                            error: None,
+                            duration_ms: Some(elapsed_ms),
+                        })
+                        .await;
                 }
                 Err(e) => {
-                    logger.log(crate::audit::AuditRecord {
-                        id: format!("audit-{}", generate_call_id()),
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                        role: role.map(|r| r.to_string()),
-                        token_prefix: token_prefix.map(|s| s.to_string()),
-                        client_ip: client_ip.map(|s| s.to_string()),
-                        terminal_id: target_tid,
-                        action: format!("tool:{}", tool_name),
-                        tool_name: Some(tool_name.to_string()),
-                        arguments: Some(arguments),
-                        status: "FAILED".to_string(),
-                        error: Some(e.clone()),
-                        duration_ms: Some(elapsed_ms),
-                    });
+                    logger
+                        .log_async(crate::audit::AuditRecord {
+                            id: format!("audit-{}", generate_call_id()),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            role: role.map(|r| r.to_string()),
+                            token_prefix: token_prefix.map(|s| s.to_string()),
+                            client_ip: client_ip.map(|s| s.to_string()),
+                            terminal_id: target_tid,
+                            action: format!("tool:{}", tool_name),
+                            tool_name: Some(tool_name.to_string()),
+                            arguments: Some(arguments),
+                            status: "FAILED".to_string(),
+                            error: Some(e.clone()),
+                            duration_ms: Some(elapsed_ms),
+                        })
+                        .await;
                 }
             }
         }
 
         result
+    }
+
+    /// Returns whether a name is a protocol-registered Agent tool that this Router forwards.
+    pub fn is_forwarded_tool(tool_name: &str) -> bool {
+        agent_tool(tool_name).is_some()
     }
 
     async fn execute_dispatch_inner(
@@ -609,6 +625,27 @@ impl McpRouter {
         arguments: Value,
         session_id: Option<&str>,
     ) -> Result<Value, String> {
+        if let Some(spec) = agent_tool(tool_name) {
+            let explicit_tid = arguments
+                .get("terminal_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let sid_opt = arguments
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .or(session_id);
+            let target_terminal_id = self
+                .resolve_target_terminal_with_session(explicit_tid.as_deref(), sid_opt)
+                .await?;
+            let timeout_secs = arguments
+                .get("timeout_secs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(35);
+            return self
+                .invoke_tool(&target_terminal_id, spec.name, arguments, timeout_secs)
+                .await;
+        }
+
         match tool_name {
             "list_terminals" => {
                 let terminals = self.list_terminals().await;
@@ -655,14 +692,11 @@ impl McpRouter {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
-                let tags = arguments
-                    .get("tags")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                            .collect::<Vec<String>>()
-                    });
+                let tags = arguments.get("tags").and_then(|v| v.as_array()).map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect::<Vec<String>>()
+                });
 
                 let meta = self
                     .registry
@@ -700,7 +734,7 @@ impl McpRouter {
                 let calls = self.list_pending_call_details(tid);
                 serde_json::to_value(calls).map_err(|e| e.to_string())
             }
-            // Forwarded diagnostic tools
+            // `cancel_task` is a compatibility alias. It is intentionally not listed and never forwarded.
             "cancel_tool" | "cancel_task" => {
                 let cid = arguments
                     .get("call_id")
@@ -713,60 +747,6 @@ impl McpRouter {
                     "message": format!("Tool call '{}' cancelled successfully", cid)
                 }))
             }
-            "get_system_overview"
-            | "exec_powershell"
-            | "exec_cmd"
-            | "list_processes"
-            | "kill_process"
-            | "manage_service"
-            | "read_text_file"
-            | "write_text_file"
-            | "capture_screen"
-            | "list_monitors"
-            | "get_marked_screen"
-            | "list_directory"
-            | "search_files"
-            | "list_network_connections"
-            | "test_network"
-            | "get_event_logs"
-            | "mouse_click"
-            | "mouse_move"
-            | "mouse_drag"
-            | "mouse_scroll"
-            | "type_text"
-            | "press_key"
-            | "key_down"
-            | "key_up"
-            | "hotkey"
-            | "get_ui_tree"
-            | "click_element"
-            | "set_element_text"
-            | "click_mark"
-            | "list_windows"
-            | "focus_window"
-            | "close_window"
-            | "batch_actions" => {
-                let explicit_tid = arguments
-                    .get("terminal_id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-
-                let sid_opt = arguments
-                    .get("session_id")
-                    .and_then(|v| v.as_str())
-                    .or(session_id);
-
-                let target_terminal_id = self
-                    .resolve_target_terminal_with_session(explicit_tid.as_deref(), sid_opt)
-                    .await?;
-
-                let timeout_secs = arguments
-                    .get("timeout_secs")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(35);
-
-                self.invoke_tool(&target_terminal_id, tool_name, arguments, timeout_secs).await
-            }
             unknown => Err(format!("Unknown or unsupported tool: '{}'", unknown)),
         }
     }
@@ -774,12 +754,7 @@ impl McpRouter {
     /// Retrieve the most recently cached desktop frame for a terminal
     pub async fn get_latest_desktop_frame(&self, terminal_id: &str) -> Option<DesktopFrameCache> {
         let frames = self.desktop_frames.read().unwrap();
-        let mut frame = frames.get(terminal_id).cloned()?;
-        if frame.data.is_empty() && !frame.raw_bytes.is_empty() {
-            use base64::Engine;
-            frame.data = base64::prelude::BASE64_STANDARD.encode(&frame.raw_bytes);
-        }
-        Some(frame)
+        frames.get(terminal_id).cloned()
     }
 
     /// Retrieve the raw JPEG bytes of the latest desktop frame for a terminal
@@ -789,15 +764,13 @@ impl McpRouter {
     ) -> Option<(u32, u32, u32, u64, Vec<u8>)> {
         let frames = self.desktop_frames.read().unwrap();
         let frame = frames.get(terminal_id)?;
-        let raw = if !frame.raw_bytes.is_empty() {
-            frame.raw_bytes.clone()
-        } else {
-            use base64::Engine;
-            base64::prelude::BASE64_STANDARD
-                .decode(&frame.data)
-                .unwrap_or_default()
-        };
-        Some((frame.display_index, frame.width, frame.height, frame.timestamp, raw))
+        Some((
+            frame.display_index,
+            frame.width,
+            frame.height,
+            frame.timestamp,
+            frame.raw_bytes.clone(),
+        ))
     }
 
     /// Instruct an agent terminal to start streaming its desktop frames
@@ -807,13 +780,14 @@ impl McpRouter {
         fps: u32,
         quality: u8,
         display_index: u32,
+        scale: f32,
     ) -> Result<(), String> {
         self.desktop_frames.write().unwrap().remove(terminal_id);
         let msg = ServerToAgentMessage::StartDesktopStream {
             display_index,
             fps: if fps == 0 { 15 } else { fps },
             quality: if quality == 0 { 60 } else { quality },
-            scale: 1.0,
+            scale,
         };
         self.registry.send_to_terminal(terminal_id, msg).await
     }
@@ -849,36 +823,6 @@ impl AgentMessageHandler for McpRouter {
         self.abort_pending_calls_for_terminal(terminal_id, reason);
     }
 
-    fn handle_desktop_frame(
-        &self,
-        terminal_id: &str,
-        display_index: u32,
-        width: u32,
-        height: u32,
-        format: &str,
-        data: &str,
-        timestamp: u64,
-    ) {
-        let mut frames = self.desktop_frames.write().unwrap();
-        if let Some(existing) = frames.get(terminal_id) {
-            if timestamp < existing.timestamp {
-                return;
-            }
-        }
-        frames.insert(
-            terminal_id.to_string(),
-            DesktopFrameCache {
-                display_index,
-                width,
-                height,
-                format: format.to_string(),
-                data: data.to_string(),
-                raw_bytes: Vec::new(),
-                timestamp,
-            },
-        );
-    }
-
     fn handle_desktop_frame_binary(
         &self,
         terminal_id: &str,
@@ -890,6 +834,18 @@ impl AgentMessageHandler for McpRouter {
                 return;
             }
         }
+        if frame.data.is_empty() {
+            if let Some(existing) = frames.get_mut(terminal_id) {
+                existing.timestamp = frame.timestamp;
+            } else {
+                tracing::warn!(
+                    "dropping empty desktop keepalive for [{}]: no cached frame yet",
+                    terminal_id
+                );
+            }
+            return;
+        }
+        let data = base64::prelude::BASE64_STANDARD.encode(&frame.data);
         frames.insert(
             terminal_id.to_string(),
             DesktopFrameCache {
@@ -897,7 +853,7 @@ impl AgentMessageHandler for McpRouter {
                 width: frame.width,
                 height: frame.height,
                 format: "jpeg".to_string(),
-                data: String::new(),
+                data,
                 raw_bytes: frame.data,
                 timestamp: frame.timestamp,
             },
