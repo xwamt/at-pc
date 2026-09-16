@@ -11,13 +11,23 @@ static TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 fn test_get_ui_tree_structure_and_caching() {
     let _lock = TEST_MUTEX.blocking_lock();
     let tree_res = get_ui_tree(Some(4), None);
-    assert!(tree_res.is_ok(), "get_ui_tree should succeed: {:?}", tree_res.err());
+    assert!(
+        tree_res.is_ok(),
+        "get_ui_tree should succeed: {:?}",
+        tree_res.err()
+    );
 
     let tree = tree_res.unwrap();
-    assert!(!tree.active_window.is_empty(), "active_window should not be empty");
+    assert!(
+        !tree.active_window.is_empty(),
+        "active_window should not be empty"
+    );
     assert!(tree.window_bounds[2] > 0, "window width should be > 0");
     assert!(tree.window_bounds[3] > 0, "window height should be > 0");
-    assert!(!tree.elements.is_empty(), "elements list should not be empty");
+    assert!(
+        !tree.elements.is_empty(),
+        "elements list should not be empty"
+    );
     assert_eq!(tree.total_elements, tree.elements.len());
 
     // Verify first element is cached
@@ -129,7 +139,11 @@ fn test_set_element_text_and_cache_update() {
     at_pc_agent::tools::uia::store_cached_elements(&mock_elements);
 
     let res = set_element_text(301, "new search query");
-    assert!(res.is_ok(), "set_element_text should succeed: {:?}", res.err());
+    assert!(
+        res.is_ok(),
+        "set_element_text should succeed: {:?}",
+        res.err()
+    );
     let val = res.unwrap();
     assert_eq!(val["success"], true);
     assert_eq!(val["element_id"], 301);
@@ -151,21 +165,32 @@ async fn test_executor_uia_tool_dispatch_and_permission_toggle() {
     let tree_res = executor_disabled
         .execute("get_ui_tree", json!({ "depth": 3 }))
         .await;
-    assert!(tree_res.is_ok(), "get_ui_tree should be allowed without computer_use: {:?}", tree_res.err());
+    assert!(
+        tree_res.is_ok(),
+        "get_ui_tree should be allowed without computer_use: {:?}",
+        tree_res.err()
+    );
 
     // click_element requires computer_use
     let click_res = executor_disabled
         .execute("click_element", json!({ "element_id": 1 }))
         .await;
     assert!(click_res.is_err());
-    assert!(click_res.unwrap_err().contains("Computer-use operations are disabled"));
+    assert!(click_res
+        .unwrap_err()
+        .contains("Computer-use operations are disabled"));
 
     // set_element_text requires computer_use
     let text_res = executor_disabled
-        .execute("set_element_text", json!({ "element_id": 1, "text": "hello" }))
+        .execute(
+            "set_element_text",
+            json!({ "element_id": 1, "text": "hello" }),
+        )
         .await;
     assert!(text_res.is_err());
-    assert!(text_res.unwrap_err().contains("Computer-use operations are disabled"));
+    assert!(text_res
+        .unwrap_err()
+        .contains("Computer-use operations are disabled"));
 
     // 2. With computer-use enabled
     let executor_enabled = AgentExecutor::new().with_computer_use(true);
@@ -182,14 +207,28 @@ async fn test_executor_uia_tool_dispatch_and_permission_toggle() {
     }]);
 
     let click_ok = executor_enabled
-        .execute("click_element", json!({ "element_id": 401, "action_type": "click" }))
+        .execute(
+            "click_element",
+            json!({ "element_id": 401, "action_type": "click" }),
+        )
         .await;
-    assert!(click_ok.is_ok(), "click_element should succeed when enabled: {:?}", click_ok.err());
+    assert!(
+        click_ok.is_ok(),
+        "click_element should succeed when enabled: {:?}",
+        click_ok.err()
+    );
 
     let text_ok = executor_enabled
-        .execute("set_element_text", json!({ "element_id": 401, "text": "agent input" }))
+        .execute(
+            "set_element_text",
+            json!({ "element_id": 401, "text": "agent input" }),
+        )
         .await;
-    assert!(text_ok.is_ok(), "set_element_text should succeed when enabled: {:?}", text_ok.err());
+    assert!(
+        text_ok.is_ok(),
+        "set_element_text should succeed when enabled: {:?}",
+        text_ok.err()
+    );
 }
 
 #[test]
@@ -197,13 +236,24 @@ fn test_get_ui_tree_window_title_filtering() {
     let _lock = TEST_MUTEX.blocking_lock();
     // Non-existent window title must return Err
     let not_found_res = get_ui_tree(Some(3), Some("nonexistent_window_filter_xyz123_456"));
-    assert!(not_found_res.is_err(), "Non-existent window title must return error");
+    assert!(
+        not_found_res.is_err(),
+        "Non-existent window title must return error"
+    );
     let err = not_found_res.unwrap_err();
-    assert!(err.contains("No window matching title"), "Error should explain window was not found: {}", err);
+    assert!(
+        err.contains("No window matching title"),
+        "Error should explain window was not found: {}",
+        err
+    );
 
     // Empty or whitespace window title should fall back gracefully to active window
     let empty_title_res = get_ui_tree(Some(3), Some("   "));
-    assert!(empty_title_res.is_ok(), "Whitespace title should fall back to active window: {:?}", empty_title_res.err());
+    assert!(
+        empty_title_res.is_ok(),
+        "Whitespace title should fall back to active window: {:?}",
+        empty_title_res.err()
+    );
 }
 
 #[test]
@@ -211,12 +261,25 @@ fn test_get_ui_tree_depth_filtering() {
     let _lock = TEST_MUTEX.blocking_lock();
     // Depth 1 should return only top-level container/titlebar
     let d1_res = get_ui_tree(Some(1), None).expect("Depth 1 should succeed");
-    assert!(d1_res.elements.len() <= 3, "Depth 1 should return pruned shallow elements: {}", d1_res.elements.len());
+    assert!(
+        d1_res.elements.len() <= 3,
+        "Depth 1 should return pruned shallow elements: {}",
+        d1_res.elements.len()
+    );
 
     // Depth 2+ includes child controls (Buttons, Edit)
     let d2_res = get_ui_tree(Some(3), None).expect("Depth 3 should succeed");
-    assert!(d2_res.elements.len() >= d1_res.elements.len(), "Depth 3 should return deeper elements");
-    assert!(d2_res.elements.iter().any(|e| e.control_type == "Edit" || e.control_type == "Button"), "Depth 3 should include interactive controls");
+    assert!(
+        d2_res.elements.len() >= d1_res.elements.len(),
+        "Depth 3 should return deeper elements"
+    );
+    assert!(
+        d2_res
+            .elements
+            .iter()
+            .any(|e| e.control_type == "Edit" || e.control_type == "Button"),
+        "Depth 3 should include interactive controls"
+    );
 }
 
 #[test]
@@ -236,7 +299,11 @@ fn test_click_element_invalid_action_type() {
     let res = click_element(501, Some("unsupported_action"));
     assert!(res.is_err());
     let err = res.unwrap_err();
-    assert!(err.contains("Invalid action_type"), "Should reject unknown action_type: {}", err);
+    assert!(
+        err.contains("Invalid action_type"),
+        "Should reject unknown action_type: {}",
+        err
+    );
 }
 
 #[tokio::test]
@@ -257,15 +324,29 @@ async fn test_click_and_set_text_with_string_element_id() {
 
     // Call click_element with string ID with leading hash "#601"
     let click_res = executor
-        .execute("click_element", json!({ "element_id": "#601", "action_type": "click" }))
+        .execute(
+            "click_element",
+            json!({ "element_id": "#601", "action_type": "click" }),
+        )
         .await;
-    assert!(click_res.is_ok(), "click_element with '#601' should succeed: {:?}", click_res.err());
+    assert!(
+        click_res.is_ok(),
+        "click_element with '#601' should succeed: {:?}",
+        click_res.err()
+    );
 
     // Call set_element_text with string ID "601"
     let set_res = executor
-        .execute("set_element_text", json!({ "element_id": "601", "text": "replaced text" }))
+        .execute(
+            "set_element_text",
+            json!({ "element_id": "601", "text": "replaced text" }),
+        )
         .await;
-    assert!(set_res.is_ok(), "set_element_text with '601' should succeed: {:?}", set_res.err());
+    assert!(
+        set_res.is_ok(),
+        "set_element_text with '601' should succeed: {:?}",
+        set_res.err()
+    );
 
     let cached = get_cached_element(601).expect("Element 601 should exist");
     assert_eq!(cached.value.as_deref(), Some("replaced text"));
@@ -290,7 +371,11 @@ async fn test_set_element_text_empty_string_clearing() {
     let res = executor
         .execute("set_element_text", json!({ "element_id": 701, "text": "" }))
         .await;
-    assert!(res.is_ok(), "Setting text to empty string should succeed: {:?}", res.err());
+    assert!(
+        res.is_ok(),
+        "Setting text to empty string should succeed: {:?}",
+        res.err()
+    );
 
     let cached = get_cached_element(701).unwrap();
     assert_eq!(cached.value.as_deref(), Some(""));
@@ -320,4 +405,3 @@ fn test_session_unique_element_ids_monotonic() {
         "Elements from previous tree call must remain cached across queries"
     );
 }
-

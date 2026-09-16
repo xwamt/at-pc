@@ -1,6 +1,6 @@
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-use serde_json::json;
 
 use at_pc_agent::executor::AgentExecutor;
 use at_pc_agent::ws_client::{AgentWsClient, ClientConnectionStatus};
@@ -48,7 +48,10 @@ fn test_mcp_tool_definitions_include_uia_tools() {
     let click_req = click_tool["inputSchema"]["required"].as_array().unwrap();
     assert!(click_req.iter().any(|r| r == "element_id"));
 
-    let text_tool = tools.iter().find(|t| t["name"] == "set_element_text").unwrap();
+    let text_tool = tools
+        .iter()
+        .find(|t| t["name"] == "set_element_text")
+        .unwrap();
     let text_req = text_tool["inputSchema"]["required"].as_array().unwrap();
     assert!(text_req.iter().any(|r| r == "element_id"));
     assert!(text_req.iter().any(|r| r == "text"));
@@ -90,32 +93,38 @@ async fn test_router_forwards_and_correlates_uia_tool_calls() {
             assert_eq!(arguments["window_title"], "Notepad");
 
             // Agent responds with mock UiTreeResponse
-            router.handle_tool_result(AgentToServerMessage::ToolResult {
-                call_id,
-                success: true,
-                result: json!({
-                    "active_window": "Notepad - Untitled",
-                    "window_bounds": [100, 100, 800, 600],
-                    "elements": [
-                        {
-                            "id": 1,
-                            "type": "Edit",
-                            "name": "Text Editor",
-                            "rect": [100, 150, 800, 550],
-                            "enabled": true
-                        }
-                    ],
-                    "total_elements": 1
-                }),
-                error: None,
-                duration_ms: 25,
-            }).await;
+            router
+                .handle_tool_result(AgentToServerMessage::ToolResult {
+                    call_id,
+                    success: true,
+                    result: json!({
+                        "active_window": "Notepad - Untitled",
+                        "window_bounds": [100, 100, 800, 600],
+                        "elements": [
+                            {
+                                "id": 1,
+                                "type": "Edit",
+                                "name": "Text Editor",
+                                "rect": [100, 150, 800, 550],
+                                "enabled": true
+                            }
+                        ],
+                        "total_elements": 1
+                    }),
+                    error: None,
+                    duration_ms: 25,
+                })
+                .await;
         }
         _ => panic!("Expected InvokeTool variant"),
     }
 
-    let result_val = invoke_handle.await.unwrap().expect("Invocation should succeed");
-    let tree: UiTreeResponse = serde_json::from_value(result_val).expect("Must deserialize as UiTreeResponse");
+    let result_val = invoke_handle
+        .await
+        .unwrap()
+        .expect("Invocation should succeed");
+    let tree: UiTreeResponse =
+        serde_json::from_value(result_val).expect("Must deserialize as UiTreeResponse");
     assert_eq!(tree.active_window, "Notepad - Untitled");
     assert_eq!(tree.total_elements, 1);
     assert_eq!(tree.elements[0].control_type, "Edit");
@@ -143,7 +152,10 @@ async fn test_uia_rbac_permission_enforcement() {
         )
         .await;
     assert!(viewer_tree.is_err());
-    assert!(!viewer_tree.unwrap_err().contains("Forbidden"), "Viewer should be authorized to execute get_ui_tree");
+    assert!(
+        !viewer_tree.unwrap_err().contains("Forbidden"),
+        "Viewer should be authorized to execute get_ui_tree"
+    );
 
     // click_element and set_element_text are mutating tools -> forbidden for Viewer
     let viewer_click = router
@@ -157,7 +169,9 @@ async fn test_uia_rbac_permission_enforcement() {
         )
         .await;
     assert!(viewer_click.is_err());
-    assert!(viewer_click.unwrap_err().contains("Forbidden: Role 'viewer' is not authorized to execute tool 'click_element'"));
+    assert!(viewer_click
+        .unwrap_err()
+        .contains("Forbidden: Role 'viewer' is not authorized to execute tool 'click_element'"));
 
     let viewer_text = router
         .dispatch_tool_call_with_role(
@@ -170,7 +184,9 @@ async fn test_uia_rbac_permission_enforcement() {
         )
         .await;
     assert!(viewer_text.is_err());
-    assert!(viewer_text.unwrap_err().contains("Forbidden: Role 'viewer' is not authorized to execute tool 'set_element_text'"));
+    assert!(viewer_text
+        .unwrap_err()
+        .contains("Forbidden: Role 'viewer' is not authorized to execute tool 'set_element_text'"));
 
     // Operator tests:
     // get_ui_tree -> allowed
@@ -199,7 +215,9 @@ async fn test_uia_rbac_permission_enforcement() {
         )
         .await;
     assert!(operator_click.is_err());
-    assert!(operator_click.unwrap_err().contains("Forbidden: Role 'operator' is not authorized to execute tool 'click_element'"));
+    assert!(operator_click
+        .unwrap_err()
+        .contains("Forbidden: Role 'operator' is not authorized to execute tool 'click_element'"));
 
     let operator_text = router
         .dispatch_tool_call_with_role(
@@ -212,7 +230,9 @@ async fn test_uia_rbac_permission_enforcement() {
         )
         .await;
     assert!(operator_text.is_err());
-    assert!(operator_text.unwrap_err().contains("Forbidden: Role 'operator' is not authorized to execute tool 'set_element_text'"));
+    assert!(operator_text.unwrap_err().contains(
+        "Forbidden: Role 'operator' is not authorized to execute tool 'set_element_text'"
+    ));
 
     // Admin tests:
     // All allowed through RBAC
@@ -228,7 +248,11 @@ async fn test_uia_rbac_permission_enforcement() {
             )
             .await;
         assert!(admin_res.is_err());
-        assert!(!admin_res.unwrap_err().contains("Forbidden"), "Admin should be authorized for {}", tool);
+        assert!(
+            !admin_res.unwrap_err().contains("Forbidden"),
+            "Admin should be authorized for {}",
+            tool
+        );
     }
 }
 
@@ -333,7 +357,10 @@ async fn test_mcp_desktop_automation_prompts_and_guidelines() {
     let init_resp = at_pc_server::mcp::handle_jsonrpc_request(&router, &init_req)
         .await
         .expect("initialize should return response");
-    assert_eq!(init_resp["result"]["capabilities"]["prompts"]["listChanged"], false);
+    assert_eq!(
+        init_resp["result"]["capabilities"]["prompts"]["listChanged"],
+        false
+    );
 
     // 2. prompts/list returns desktop_automation_strategy
     let list_req = json!({
@@ -345,8 +372,12 @@ async fn test_mcp_desktop_automation_prompts_and_guidelines() {
     let list_resp = at_pc_server::mcp::handle_jsonrpc_request(&router, &list_req)
         .await
         .expect("prompts/list should return response");
-    let prompts = list_resp["result"]["prompts"].as_array().expect("Prompts array");
-    assert!(prompts.iter().any(|p| p["name"] == "desktop_automation_strategy"));
+    let prompts = list_resp["result"]["prompts"]
+        .as_array()
+        .expect("Prompts array");
+    assert!(prompts
+        .iter()
+        .any(|p| p["name"] == "desktop_automation_strategy"));
 
     // 3. prompts/get returns tier hierarchy guidelines
     let get_req = json!({

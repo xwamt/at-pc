@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::models::{HeartbeatMetrics, TerminalInfo};
+use serde::{Deserialize, Serialize};
 
 /// Messages sent from Agent (Client) to Server
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,14 +23,6 @@ pub enum AgentToServerMessage {
     Disconnect {
         terminal_id: String,
         reason: String,
-    },
-    DesktopFrame {
-        display_index: u32,
-        width: u32,
-        height: u32,
-        format: String,
-        data: String,
-        timestamp: u64,
     },
 }
 

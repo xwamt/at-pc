@@ -12,7 +12,9 @@ pub mod ws_client;
 
 use std::sync::Arc;
 
-pub use app::{run_agent_app, setup_custom_fonts, AgentApp, AgentAppState, AgentAuditLog};
+#[cfg(feature = "gui")]
+pub use app::{run_agent_app, setup_custom_fonts, AgentApp};
+pub use app::{AgentAppState, AgentAuditLog};
 pub use config::{AgentConfig, DeviceConfig, ServerConfig};
 pub use executor::AgentExecutor;
 pub use input::inject_input_event;
@@ -20,7 +22,9 @@ pub use stream::DesktopStreamController;
 pub use ws_client::{AgentEventListener, AgentWsClient, ClientConnectionStatus};
 
 /// Runs the agent in headless background service mode without initializing any GUI window.
-pub async fn run_headless(config: AgentConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run_headless(
+    config: AgentConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let terminal_info = config.to_terminal_info();
     let server_url = config.server.url.clone();
     let auth_token = config.server.auth_token.clone();
@@ -28,7 +32,8 @@ pub async fn run_headless(config: AgentConfig) -> Result<(), Box<dyn std::error:
 
     tracing::info!(
         "Starting headless agent [{}] targeting server: {}",
-        terminal_info.terminal_id, server_url
+        terminal_info.terminal_id,
+        server_url
     );
 
     let executor = Arc::new(AgentExecutor::default().with_computer_use(config.enable_computer_use));

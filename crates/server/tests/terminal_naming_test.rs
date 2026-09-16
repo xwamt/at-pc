@@ -1,15 +1,15 @@
-use std::sync::Arc;
-use tokio::sync::mpsc;
-use serde_json::json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 use tower::ServiceExt; // for oneshot
 
 use at_pc_protocol::models::TerminalInfo;
 use at_pc_server::config::ServerConfig;
+use at_pc_server::mcp::create_mcp_http_router;
 use at_pc_server::router::McpRouter;
 use at_pc_server::ws::registry::TerminalRegistry;
-use at_pc_server::mcp::create_mcp_http_router;
 
 fn create_sample_terminal(id: &str, hostname: &str) -> TerminalInfo {
     TerminalInfo {
@@ -50,14 +50,20 @@ async fn test_terminal_naming_and_meta_integration() {
 
     assert_eq!(updated.custom_name.as_deref(), Some("财务部-出纳主控机"));
     assert_eq!(updated.notes.as_deref(), Some("常驻财务室302"));
-    assert_eq!(updated.tags, vec!["财务".to_string(), "关键设备".to_string()]);
+    assert_eq!(
+        updated.tags,
+        vec!["财务".to_string(), "关键设备".to_string()]
+    );
 
     // 3. Verify list_terminals now includes custom name
     let list2 = registry.list_terminals().await;
     assert_eq!(list2.len(), 1);
     assert_eq!(list2[0].custom_name.as_deref(), Some("财务部-出纳主控机"));
     assert_eq!(list2[0].notes.as_deref(), Some("常驻财务室302"));
-    assert_eq!(list2[0].tags, vec!["财务".to_string(), "关键设备".to_string()]);
+    assert_eq!(
+        list2[0].tags,
+        vec!["财务".to_string(), "关键设备".to_string()]
+    );
 
     // 4. Verify get_terminal
     let single = registry.get_terminal("pc-finance-01").await.unwrap();
@@ -89,17 +95,32 @@ async fn test_mcp_router_select_by_custom_name() {
     let router = Arc::new(McpRouter::new(registry));
 
     // Select by exact custom_name
-    let selected = router.select_terminal("研发-张三").await.expect("should find by alias");
+    let selected = router
+        .select_terminal("研发-张三")
+        .await
+        .expect("should find by alias");
     assert_eq!(selected.info.terminal_id, "node-a");
-    assert_eq!(router.get_active_terminal_id().await, Some("node-a".to_string()));
+    assert_eq!(
+        router.get_active_terminal_id().await,
+        Some("node-a".to_string())
+    );
 
     // Select by other custom_name
-    let selected2 = router.select_terminal("运维-李四").await.expect("should find by alias");
+    let selected2 = router
+        .select_terminal("运维-李四")
+        .await
+        .expect("should find by alias");
     assert_eq!(selected2.info.terminal_id, "node-b");
-    assert_eq!(router.get_active_terminal_id().await, Some("node-b".to_string()));
+    assert_eq!(
+        router.get_active_terminal_id().await,
+        Some("node-b".to_string())
+    );
 
     // Select by raw terminal_id still works
-    let selected3 = router.select_terminal("node-a").await.expect("should find by raw id");
+    let selected3 = router
+        .select_terminal("node-a")
+        .await
+        .expect("should find by raw id");
     assert_eq!(selected3.info.terminal_id, "node-a");
 }
 
@@ -170,7 +191,9 @@ async fn test_dashboard_meta_rest_api() {
     let resp2 = app.clone().oneshot(req2).await.unwrap();
     assert_eq!(resp2.status(), StatusCode::OK);
 
-    let body_bytes = axum::body::to_bytes(resp2.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp2.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let terminals_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(terminals_json[0]["custom_name"], "API重命名测试");
     assert_eq!(terminals_json[0]["notes"], "通过HTTP接口更新");
@@ -193,7 +216,9 @@ async fn test_dashboard_meta_rest_api() {
         .unwrap();
 
     let resp4 = app.oneshot(req4).await.unwrap();
-    let body_bytes4 = axum::body::to_bytes(resp4.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes4 = axum::body::to_bytes(resp4.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let terminals_json4: serde_json::Value = serde_json::from_slice(&body_bytes4).unwrap();
     assert_eq!(terminals_json4.as_array().unwrap().len(), 0);
 }

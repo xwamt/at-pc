@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 async fn test_terminal_registration_and_heartbeat() {
     let registry = Arc::new(TerminalRegistry::new());
     let (tx, _rx) = mpsc::unbounded_channel();
-    
+
     let info = TerminalInfo {
         terminal_id: "node-1".to_string(),
         hostname: "HOST-1".to_string(),
@@ -22,7 +22,10 @@ async fn test_terminal_registration_and_heartbeat() {
     };
 
     registry.register(info.clone(), tx).await;
-    assert_eq!(registry.get_status("node-1").await, Some(TerminalStatus::Online));
+    assert_eq!(
+        registry.get_status("node-1").await,
+        Some(TerminalStatus::Online)
+    );
 
     let metrics = HeartbeatMetrics {
         cpu_usage_percent: 12.5,
@@ -32,7 +35,7 @@ async fn test_terminal_registration_and_heartbeat() {
         timestamp: 1725180000,
     };
     registry.update_heartbeat("node-1", metrics).await.unwrap();
-    
+
     let list = registry.list_terminals().await;
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].info.terminal_id, "node-1");
@@ -83,14 +86,20 @@ async fn test_offline_sweep_threshold() {
     };
 
     registry.register(info, tx).await;
-    assert_eq!(registry.get_status("node-3").await, Some(TerminalStatus::Online));
+    assert_eq!(
+        registry.get_status("node-3").await,
+        Some(TerminalStatus::Online)
+    );
 
     // Wait past threshold
     tokio::time::sleep(Duration::from_millis(80)).await;
 
     let swept = registry.sweep_offline().await;
     assert_eq!(swept, vec!["node-3".to_string()]);
-    assert_eq!(registry.get_status("node-3").await, Some(TerminalStatus::Offline));
+    assert_eq!(
+        registry.get_status("node-3").await,
+        Some(TerminalStatus::Offline)
+    );
 
     // Send heartbeat to recover
     let metrics = HeartbeatMetrics {
@@ -101,7 +110,10 @@ async fn test_offline_sweep_threshold() {
         timestamp: 1725180050,
     };
     registry.update_heartbeat("node-3", metrics).await.unwrap();
-    assert_eq!(registry.get_status("node-3").await, Some(TerminalStatus::Online));
+    assert_eq!(
+        registry.get_status("node-3").await,
+        Some(TerminalStatus::Online)
+    );
 }
 
 #[tokio::test]
@@ -123,7 +135,10 @@ async fn test_send_to_terminal_channel() {
     let cancel_msg = ServerToAgentMessage::CancelTool {
         call_id: "call-123".to_string(),
     };
-    registry.send_to_terminal("node-4", cancel_msg.clone()).await.unwrap();
+    registry
+        .send_to_terminal("node-4", cancel_msg.clone())
+        .await
+        .unwrap();
 
     let received = rx.recv().await.unwrap();
     assert_eq!(received, cancel_msg);

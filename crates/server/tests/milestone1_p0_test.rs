@@ -1,9 +1,9 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tower::ServiceExt;
 
@@ -12,9 +12,10 @@ use at_pc_protocol::models::TerminalInfo;
 use at_pc_server::config::ServerConfig;
 use at_pc_server::mcp::{create_mcp_http_router, run_stdio_server_with_streams};
 use at_pc_server::router::McpRouter;
-use at_pc_server::ws::codec::{WsMessage, WsReader, WsWriter};
 use at_pc_server::ws::handler::{handle_stream, WsServerState};
 use at_pc_server::ws::registry::TerminalRegistry;
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::tungstenite::Message;
 
 fn create_test_terminal(id: &str, hostname: &str) -> TerminalInfo {
     TerminalInfo {
@@ -187,7 +188,12 @@ async fn test_p0_4_fail_fast_when_terminal_disconnects() {
     let invoke_handle = tokio::spawn(async move {
         let start = Instant::now();
         let res = router_clone
-            .invoke_tool("fast-fail-node", "exec_cmd", json!({"command": "sleep 30"}), 35)
+            .invoke_tool(
+                "fast-fail-node",
+                "exec_cmd",
+                json!({"command": "sleep 30"}),
+                35,
+            )
             .await;
         (res, start.elapsed())
     });
@@ -197,16 +203,25 @@ async fn test_p0_4_fail_fast_when_terminal_disconnects() {
     assert!(matches!(msg, ServerToAgentMessage::InvokeTool { .. }));
 
     // Immediately simulate disconnect
-    let aborted = router.abort_pending_calls_for_terminal("fast-fail-node", "Agent process terminated");
+    let aborted =
+        router.abort_pending_calls_for_terminal("fast-fail-node", "Agent process terminated");
     assert_eq!(aborted, 1);
 
     // Verify the invocation failed immediately (< 100ms) without waiting 35s
     let (res, elapsed) = invoke_handle.await.unwrap();
-    assert!(elapsed.as_millis() < 100, "Fail-fast took too long: {:?}", elapsed);
+    assert!(
+        elapsed.as_millis() < 100,
+        "Fail-fast took too long: {:?}",
+        elapsed
+    );
     assert!(res.is_err());
     let err_msg = res.unwrap_err();
     assert!(err_msg.contains("disconnected"), "Error msg: {}", err_msg);
-    assert!(err_msg.contains("Agent process terminated"), "Error msg: {}", err_msg);
+    assert!(
+        err_msg.contains("Agent process terminated"),
+        "Error msg: {}",
+        err_msg
+    );
 }
 
 #[tokio::test]
@@ -227,57 +242,52 @@ async fn test_p0_4_fail_fast_via_ws_connection_drop() {
         handle_stream(server_stream, state).await;
     });
 
-    let (mut client_r, mut client_w) = tokio::io::split(client_stream);
+    let (mut client_ws, _) = tokio_tungstenite::client_async("ws://127.0.0.1/ws", client_stream)
+        .await
+        .expect("Client handshake failed");
 
-    // 1. Handshake
-    let key = "dGhlIHNhbXBsZSBub25jZQ==";
-    let handshake_req = format!(
-        "GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
-        key
-    );
-    client_w.write_all(handshake_req.as_bytes()).await.unwrap();
-    let mut resp_buf = [0u8; 1024];
-    let n = client_r.read(&mut resp_buf).await.unwrap();
-    let resp = String::from_utf8_lossy(&resp_buf[..n]);
-    assert!(resp.starts_with("HTTP/1.1 101 Switching Protocols"));
-
-    // 2. Register
-    let mut writer = WsWriter::new(client_w);
-    let mut reader = WsReader::new(client_r);
-
+    // 1. Register
     let reg_msg = AgentToServerMessage::Register {
         info: create_test_terminal("ws-fail-fast-node", "WS-NODE"),
         auth_token: None,
     };
-    writer
-        .write_message(&WsMessage::Text(serde_json::to_string(&reg_msg).unwrap()))
+    client_ws
+        .send(Message::Text(serde_json::to_string(&reg_msg).unwrap()))
         .await
         .unwrap();
 
-    let ack_msg = reader.read_message().await.unwrap();
-    assert!(matches!(ack_msg, WsMessage::Text(_)));
+    let ack_msg = client_ws.next().await.unwrap().unwrap();
+    assert!(matches!(ack_msg, Message::Text(_)));
 
-    // 3. Invoke tool on this terminal
+    // 2. Invoke tool on this terminal
     let router_clone = router.clone();
     let invoke_handle = tokio::spawn(async move {
         let start = Instant::now();
         let res = router_clone
-            .invoke_tool("ws-fail-fast-node", "exec_cmd", json!({"command": "sleep 30"}), 35)
+            .invoke_tool(
+                "ws-fail-fast-node",
+                "exec_cmd",
+                json!({"command": "sleep 30"}),
+                35,
+            )
             .await;
         (res, start.elapsed())
     });
 
     // Read the InvokeTool on client
-    let invoke_ws_msg = reader.read_message().await.unwrap();
-    assert!(matches!(invoke_ws_msg, WsMessage::Text(_)));
+    let invoke_ws_msg = client_ws.next().await.unwrap().unwrap();
+    assert!(matches!(invoke_ws_msg, Message::Text(_)));
 
-    // 4. Client crashes / connection drops (drop reader and writer)
-    drop(writer);
-    drop(reader);
+    // 3. Client crashes / connection drops
+    drop(client_ws);
 
     // Verify fail-fast immediately triggers (< 150ms)
     let (res, elapsed) = invoke_handle.await.unwrap();
-    assert!(elapsed.as_millis() < 150, "Fail-fast via WS drop took too long: {:?}", elapsed);
+    assert!(
+        elapsed.as_millis() < 150,
+        "Fail-fast via WS drop took too long: {:?}",
+        elapsed
+    );
     assert!(res.is_err());
     let err_str = res.unwrap_err();
     assert!(err_str.contains("disconnected"), "Error was: {}", err_str);
@@ -356,12 +366,23 @@ async fn test_p0_5_stdio_async_concurrency() {
 
     // 3. Receive first response - it MUST be ping (id: 2) within 100ms, before slow call (300ms) finishes!
     let start = Instant::now();
-    let first_line = client_reader.next_line().await.unwrap().expect("Expected line from stdio");
+    let first_line = client_reader
+        .next_line()
+        .await
+        .unwrap()
+        .expect("Expected line from stdio");
     let elapsed = start.elapsed();
 
     let first_resp: Value = serde_json::from_str(&first_line).unwrap();
-    assert_eq!(first_resp["id"], 2, "First response should be ping (id 2), proving non-blocking stdio!");
-    assert!(elapsed.as_millis() < 100, "Ping response took too long: {:?}", elapsed);
+    assert_eq!(
+        first_resp["id"], 2,
+        "First response should be ping (id 2), proving non-blocking stdio!"
+    );
+    assert!(
+        elapsed.as_millis() < 100,
+        "Ping response took too long: {:?}",
+        elapsed
+    );
 
     // Clean up
     drop(client_writer);
@@ -437,7 +458,10 @@ async fn test_p0_2_cors_preflight_on_authenticated_api() {
         .method("OPTIONS")
         .header("Origin", "https://trusted-admin.corp")
         .header("Access-Control-Request-Method", "GET")
-        .header("Access-Control-Request-Headers", "authorization,content-type")
+        .header(
+            "Access-Control-Request-Headers",
+            "authorization,content-type",
+        )
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
@@ -486,7 +510,12 @@ async fn test_p0_4_fail_fast_via_heartbeat_sweep() {
     let invoke_handle = tokio::spawn(async move {
         let start = Instant::now();
         let res = router_clone
-            .invoke_tool("sweep-node-01", "exec_cmd", json!({"command": "sleep 30"}), 35)
+            .invoke_tool(
+                "sweep-node-01",
+                "exec_cmd",
+                json!({"command": "sleep 30"}),
+                35,
+            )
             .await;
         (res, start.elapsed())
     });
@@ -503,10 +532,18 @@ async fn test_p0_4_fail_fast_via_heartbeat_sweep() {
         .start_sweep_task_with_handler(Duration::from_millis(20), router.clone());
 
     let (res, elapsed) = invoke_handle.await.unwrap();
-    assert!(elapsed.as_millis() < 200, "Fail-fast via sweep took too long: {:?}", elapsed);
+    assert!(
+        elapsed.as_millis() < 200,
+        "Fail-fast via sweep took too long: {:?}",
+        elapsed
+    );
     assert!(res.is_err());
     let err_msg = res.unwrap_err();
-    assert!(err_msg.contains("Heartbeat timed out"), "Error was: {}", err_msg);
+    assert!(
+        err_msg.contains("Heartbeat timed out"),
+        "Error was: {}",
+        err_msg
+    );
 
     sweep_handle.abort();
 }
@@ -532,21 +569,32 @@ async fn test_p0_5_stdio_jsonrpc_parse_error_response() {
         .await
         .unwrap();
 
-    let err_line = client_reader.next_line().await.unwrap().expect("Expected response for parse error");
+    let err_line = client_reader
+        .next_line()
+        .await
+        .unwrap()
+        .expect("Expected response for parse error");
     let err_val: Value = serde_json::from_str(&err_line).unwrap();
     assert_eq!(err_val["jsonrpc"], "2.0");
-    assert_eq!(err_val["error"]["code"], -32700, "Expected JSON-RPC parse error code -32700");
+    assert_eq!(
+        err_val["error"]["code"], -32700,
+        "Expected JSON-RPC parse error code -32700"
+    );
 
     // 2. Send empty batch []
-    client_writer
-        .write_all(b"[]\n")
-        .await
-        .unwrap();
+    client_writer.write_all(b"[]\n").await.unwrap();
 
-    let empty_batch_line = client_reader.next_line().await.unwrap().expect("Expected response for empty batch");
+    let empty_batch_line = client_reader
+        .next_line()
+        .await
+        .unwrap()
+        .expect("Expected response for empty batch");
     let empty_batch_val: Value = serde_json::from_str(&empty_batch_line).unwrap();
     assert_eq!(empty_batch_val["jsonrpc"], "2.0");
-    assert_eq!(empty_batch_val["error"]["code"], -32600, "Expected invalid request code -32600 for empty batch");
+    assert_eq!(
+        empty_batch_val["error"]["code"], -32600,
+        "Expected invalid request code -32600 for empty batch"
+    );
 
     drop(client_writer);
     let _ = stdio_handle.await;

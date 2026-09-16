@@ -3,9 +3,13 @@ use std::time::Duration;
 use tracing::{error, info, Level};
 
 use at_pc_server::config::ServerConfig;
-use at_pc_server::mcp::{run_stdio_server, start_mcp_http_server};
+use at_pc_server::mcp::run_stdio_server;
 use at_pc_server::router::McpRouter;
 use at_pc_server::ws::{start_ws_server_with_state, TerminalRegistry, WsServerState};
+use at_pc_server::{
+    abort_and_join_tasks, shutdown_persistence, shutdown_signal,
+    start_mcp_http_server_with_shutdown,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -36,13 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let stdio_mode = args.iter().any(|a| a == "--stdio");
 
     // Configure logging (if in stdio mode, log to stderr only to avoid corrupting stdio JSON-RPC)
-    let log_file_path = match std::env::current_dir() {
-        Ok(p) if p != std::path::Path::new("/") => p.join("at-pc-server.log"),
-        _ => std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("at-pc-server.log")))
-            .unwrap_or_else(|| std::path::PathBuf::from("at-pc-server.log")),
-    };
+    let log_file_path = at_pc_server::mcp::default_log_file_path();
 
     let file_appender = std::fs::OpenOptions::new()
         .create(true)
@@ -146,62 +144,84 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     info!("Starting at-pc-server v{}", env!("CARGO_PKG_VERSION"));
-    info!("Listen host: {}, WebSocket port: {}, MCP port: {}", config.listen_host, config.ws_port, config.mcp_port);
+    info!(
+        "Listen host: {}, WebSocket port: {}, MCP port: {}",
+        config.listen_host, config.ws_port, config.mcp_port
+    );
 
     // 2. Initialize Terminal Registry & sweep task
-    let meta_file = config
-        .meta_store_path
-        .clone()
-        .unwrap_or_else(|| {
-            match std::env::current_dir() {
+    let meta_file =
+        config
+            .meta_store_path
+            .clone()
+            .unwrap_or_else(|| match std::env::current_dir() {
                 Ok(p) if p != std::path::Path::new("/") => p.join("terminals_meta.json"),
                 _ => std::env::current_exe()
                     .ok()
                     .and_then(|p| p.parent().map(|d| d.join("terminals_meta.json")))
                     .unwrap_or_else(|| std::path::PathBuf::from("terminals_meta.json")),
-            }
-        });
+            });
     let meta_store = Arc::new(at_pc_server::meta_store::TerminalMetaStore::new(meta_file));
     let registry = Arc::new(TerminalRegistry::with_store(
         Duration::from_secs(config.offline_threshold_secs),
-        meta_store,
+        Arc::clone(&meta_store),
     ));
     // 3. Initialize MCP Router & Audit Logger
-    let audit_logger = config.audit_log_path.clone().map(|p| Arc::new(at_pc_server::audit::AuditLogger::new(Some(p))));
+    let audit_logger = config
+        .audit_log_path
+        .clone()
+        .map(|p| Arc::new(at_pc_server::audit::AuditLogger::new(Some(p))));
     let mut mcp_router = McpRouter::new(registry.clone());
     if let Some(ref al) = audit_logger {
         mcp_router = mcp_router.with_audit_logger(al.clone());
     }
     let router = Arc::new(mcp_router);
 
-    let _sweep_handle = registry
-        .clone()
-        .start_sweep_task_with_handler(Duration::from_secs(config.sweep_interval_secs), router.clone());
+    let sweep_handle = registry.clone().start_sweep_task_with_handler(
+        Duration::from_secs(config.sweep_interval_secs),
+        router.clone(),
+    );
 
     // 4. Start WebSocket Gateway in background
     let ws_state = WsServerState::with_handler(registry.clone(), config.clone(), router.clone());
     let ws_port = config.ws_port;
-    tokio::spawn(async move {
+    let ws_handle = tokio::spawn(async move {
         if let Err(e) = start_ws_server_with_state(ws_state, ws_port).await {
             error!("WebSocket server error: {}", e);
         }
     });
 
-    // 5. Run MCP gateway (stdio or HTTP/SSE)
-    if stdio_mode {
-        // In stdio mode, also launch the MCP HTTP / Web Dashboard gateway in background so port 9800 is active
+    // 5. Run MCP gateway until transport completion or signal, then stop producers before
+    // flushing the persistence writers.
+    let mut background_http = None;
+    let gateway_result = if stdio_mode {
         let http_router = router.clone();
         let http_config = config.clone();
-        tokio::spawn(async move {
-            if let Err(e) = start_mcp_http_server(http_router, http_config).await {
+        background_http = Some(tokio::spawn(async move {
+            if let Err(e) =
+                start_mcp_http_server_with_shutdown(http_router, http_config, shutdown_signal())
+                    .await
+            {
                 error!("MCP HTTP/Web gateway error in stdio mode: {}", e);
             }
-        });
-
-        run_stdio_server(router).await?;
+        }));
+        tokio::select! {
+            result = run_stdio_server(router.clone()) => result,
+            () = shutdown_signal() => Ok(()),
+        }
     } else {
-        start_mcp_http_server(router, config).await?;
+        start_mcp_http_server_with_shutdown(router.clone(), config, shutdown_signal()).await
+    };
+
+    let mut handles = vec![ws_handle, sweep_handle];
+    if let Some(handle) = background_http {
+        handles.push(handle);
+    }
+    abort_and_join_tasks(handles).await;
+
+    if let Err(error) = shutdown_persistence(&meta_store, audit_logger.as_deref()).await {
+        error!(%error, "failed to durably shut down persistence writers");
     }
 
-    Ok(())
+    gateway_result
 }

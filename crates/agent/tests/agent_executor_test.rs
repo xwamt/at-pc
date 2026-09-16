@@ -3,7 +3,9 @@ use at_pc_agent::executor::AgentExecutor;
 #[tokio::test]
 async fn test_executor_runs_system_overview() {
     let executor = AgentExecutor::new();
-    let res = executor.execute("get_system_overview", serde_json::json!({})).await;
+    let res = executor
+        .execute("get_system_overview", serde_json::json!({}))
+        .await;
     assert!(res.is_ok(), "get_system_overview failed: {:?}", res.err());
     let val = res.unwrap();
     assert!(val.get("os_name").is_some() || val.get("os").is_some());
@@ -14,12 +16,19 @@ async fn test_executor_runs_system_overview() {
 async fn test_executor_exec_cmd() {
     let executor = AgentExecutor::new();
     let res = executor
-        .execute("exec_cmd", serde_json::json!({ "command": "echo at_agent_test" }))
+        .execute(
+            "exec_cmd",
+            serde_json::json!({ "command": "echo at_agent_test" }),
+        )
         .await;
     assert!(res.is_ok(), "exec_cmd failed: {:?}", res.err());
     let val = res.unwrap();
     assert_eq!(val.get("exit_code").and_then(|c| c.as_i64()), Some(0));
-    assert!(val.get("stdout").and_then(|s| s.as_str()).unwrap().contains("at_agent_test"));
+    assert!(val
+        .get("stdout")
+        .and_then(|s| s.as_str())
+        .unwrap()
+        .contains("at_agent_test"));
 }
 
 #[tokio::test]
@@ -53,7 +62,10 @@ async fn test_executor_file_ops() {
         .await;
     assert!(read_res.is_ok());
     let read_val = read_res.unwrap();
-    assert_eq!(read_val.get("total_lines").and_then(|l| l.as_u64()), Some(3));
+    assert_eq!(
+        read_val.get("total_lines").and_then(|l| l.as_u64()),
+        Some(3)
+    );
     let content = read_val.get("content").and_then(|c| c.as_str()).unwrap();
     assert!(content.contains("line 2"));
     assert!(content.contains("line 3"));
@@ -79,7 +91,9 @@ async fn test_executor_list_processes() {
 #[tokio::test]
 async fn test_executor_unknown_tool() {
     let executor = AgentExecutor::new();
-    let res = executor.execute("non_existent_tool", serde_json::json!({})).await;
+    let res = executor
+        .execute("non_existent_tool", serde_json::json!({}))
+        .await;
     assert!(res.is_err());
     assert!(res.unwrap_err().contains("Unknown or unsupported tool"));
 }
@@ -99,7 +113,11 @@ async fn test_executor_directory_and_search() {
             }),
         )
         .await;
-    assert!(list_res.is_ok(), "list_directory failed: {:?}", list_res.err());
+    assert!(
+        list_res.is_ok(),
+        "list_directory failed: {:?}",
+        list_res.err()
+    );
     let list_val = list_res.unwrap();
     assert!(list_val.get("entries").and_then(|e| e.as_array()).is_some());
 
@@ -114,9 +132,16 @@ async fn test_executor_directory_and_search() {
             }),
         )
         .await;
-    assert!(search_res.is_ok(), "search_files failed: {:?}", search_res.err());
+    assert!(
+        search_res.is_ok(),
+        "search_files failed: {:?}",
+        search_res.err()
+    );
     let search_val = search_res.unwrap();
-    assert!(search_val.get("matches").and_then(|m| m.as_array()).is_some());
+    assert!(search_val
+        .get("matches")
+        .and_then(|m| m.as_array())
+        .is_some());
 }
 
 #[tokio::test]
@@ -130,7 +155,11 @@ async fn test_executor_network_tools() {
             serde_json::json!({ "limit": 10 }),
         )
         .await;
-    assert!(conn_res.is_ok(), "list_network_connections failed: {:?}", conn_res.err());
+    assert!(
+        conn_res.is_ok(),
+        "list_network_connections failed: {:?}",
+        conn_res.err()
+    );
 
     // 2. test_network
     let net_res = executor
@@ -144,7 +173,10 @@ async fn test_executor_network_tools() {
         .await;
     assert!(net_res.is_ok(), "test_network failed: {:?}", net_res.err());
     let net_val = net_res.unwrap();
-    assert_eq!(net_val.get("reachable").and_then(|r| r.as_bool()), Some(true));
+    assert_eq!(
+        net_val.get("reachable").and_then(|r| r.as_bool()),
+        Some(true)
+    );
 }
 
 #[tokio::test]
@@ -249,7 +281,11 @@ async fn test_executor_command_timeout_does_not_deadlock() {
             serde_json::json!({ "command": "echo post_timeout_success" }),
         )
         .await;
-    assert!(post_res.is_ok(), "Subsequent call must succeed immediately: {:?}", post_res.err());
+    assert!(
+        post_res.is_ok(),
+        "Subsequent call must succeed immediately: {:?}",
+        post_res.err()
+    );
     let val = post_res.unwrap();
     assert!(
         val.get("stdout")

@@ -1,11 +1,11 @@
 //! TLS Configuration and Acceptor Setup for HTTPS / WSS.
 //! Supports PEM certificates, private keys, and optional client CA for mTLS.
 
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
 
 use crate::config::ServerConfig;
@@ -62,7 +62,12 @@ pub fn load_rustls_server_config(
         builder
             .with_client_cert_verifier(verifier)
             .with_single_cert(certs, key)
-            .map_err(|e| format!("Failed to configure TLS server config with client verifier: {}", e))?
+            .map_err(|e| {
+                format!(
+                    "Failed to configure TLS server config with client verifier: {}",
+                    e
+                )
+            })?
     } else {
         builder
             .with_no_client_auth()
@@ -76,7 +81,8 @@ pub fn load_rustls_server_config(
 /// Creates an optional TlsAcceptor from ServerConfig if TLS is enabled
 pub fn create_tls_acceptor(config: &ServerConfig) -> Result<Option<TlsAcceptor>, String> {
     if let (Some(cert_path), Some(key_path)) = (&config.tls_cert_path, &config.tls_key_path) {
-        let sc = load_rustls_server_config(cert_path, key_path, config.tls_client_ca_path.as_deref())?;
+        let sc =
+            load_rustls_server_config(cert_path, key_path, config.tls_client_ca_path.as_deref())?;
         Ok(Some(TlsAcceptor::from(sc)))
     } else {
         Ok(None)

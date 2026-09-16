@@ -64,7 +64,10 @@ fn manage_windows_service(service_name: &str, action: &str) -> Result<ServiceSta
     match manage_windows_service_win32(service_name, action) {
         Ok(res) => return Ok(res),
         Err(e) => {
-            tracing::debug!("Native Win32 SCM call failed ({}); falling back to PowerShell", e);
+            tracing::debug!(
+                "Native Win32 SCM call failed ({}); falling back to PowerShell",
+                e
+            );
         }
     }
 
@@ -73,9 +76,12 @@ fn manage_windows_service(service_name: &str, action: &str) -> Result<ServiceSta
 }
 
 #[cfg(windows)]
-fn manage_windows_service_win32(service_name: &str, action: &str) -> Result<ServiceStatusResult, String> {
-    use windows_sys::Win32::System::Services::*;
+fn manage_windows_service_win32(
+    service_name: &str,
+    action: &str,
+) -> Result<ServiceStatusResult, String> {
     use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::System::Services::*;
 
     unsafe {
         let scm = OpenSCManagerW(
@@ -84,10 +90,16 @@ fn manage_windows_service_win32(service_name: &str, action: &str) -> Result<Serv
             SC_MANAGER_CONNECT | SC_MANAGER_ENUMERATE_SERVICE,
         );
         if scm == 0 {
-            return Err(format!("OpenSCManagerW failed with error: {}", GetLastError()));
+            return Err(format!(
+                "OpenSCManagerW failed with error: {}",
+                GetLastError()
+            ));
         }
 
-        let name_wide: Vec<u16> = service_name.encode_utf16().chain(std::iter::once(0)).collect();
+        let name_wide: Vec<u16> = service_name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
 
         let desired_access = match action {
             "status" => SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG,
@@ -101,7 +113,10 @@ fn manage_windows_service_win32(service_name: &str, action: &str) -> Result<Serv
         if service == 0 {
             let err = GetLastError();
             CloseServiceHandle(scm);
-            return Err(format!("OpenServiceW failed for '{}' (error: {})", service_name, err));
+            return Err(format!(
+                "OpenServiceW failed for '{}' (error: {})",
+                service_name, err
+            ));
         }
 
         // Execute action if not just status
@@ -109,10 +124,14 @@ fn manage_windows_service_win32(service_name: &str, action: &str) -> Result<Serv
             "start" => {
                 if StartServiceW(service, 0, std::ptr::null()) == 0 {
                     let err = GetLastError();
-                    if err != 1056 { // 1056 = ERROR_SERVICE_ALREADY_RUNNING
+                    if err != 1056 {
+                        // 1056 = ERROR_SERVICE_ALREADY_RUNNING
                         CloseServiceHandle(service);
                         CloseServiceHandle(scm);
-                        return Err(format!("StartServiceW failed for '{}' (error: {})", service_name, err));
+                        return Err(format!(
+                            "StartServiceW failed for '{}' (error: {})",
+                            service_name, err
+                        ));
                     }
                 }
             }
@@ -120,10 +139,14 @@ fn manage_windows_service_win32(service_name: &str, action: &str) -> Result<Serv
                 let mut status: SERVICE_STATUS = std::mem::zeroed();
                 if ControlService(service, SERVICE_CONTROL_STOP, &mut status) == 0 {
                     let err = GetLastError();
-                    if err != 1062 { // 1062 = ERROR_SERVICE_NOT_ACTIVE
+                    if err != 1062 {
+                        // 1062 = ERROR_SERVICE_NOT_ACTIVE
                         CloseServiceHandle(service);
                         CloseServiceHandle(scm);
-                        return Err(format!("ControlService(STOP) failed for '{}' (error: {})", service_name, err));
+                        return Err(format!(
+                            "ControlService(STOP) failed for '{}' (error: {})",
+                            service_name, err
+                        ));
                     }
                 }
             }
@@ -220,13 +243,19 @@ fn manage_windows_service_win32(service_name: &str, action: &str) -> Result<Serv
             display_name,
             status: status_str.to_string(),
             start_type,
-            message: format!("Service '{}' {} completed successfully via Win32 SCM", service_name, action),
+            message: format!(
+                "Service '{}' {} completed successfully via Win32 SCM",
+                service_name, action
+            ),
         })
     }
 }
 
 #[cfg(windows)]
-fn manage_windows_service_powershell(service_name: &str, action: &str) -> Result<ServiceStatusResult, String> {
+fn manage_windows_service_powershell(
+    service_name: &str,
+    action: &str,
+) -> Result<ServiceStatusResult, String> {
     // Sanitize service name to prevent command injection
     let sanitized_name: String = service_name
         .chars()
@@ -257,8 +286,12 @@ fn manage_windows_service_powershell(service_name: &str, action: &str) -> Result
         _ => unreachable!(),
     };
 
-    let result = exec_powershell(&ps_script, 30, None)
-        .map_err(|e| format!("Service action '{}' failed for '{}': {}", action, service_name, e))?;
+    let result = exec_powershell(&ps_script, 30, None).map_err(|e| {
+        format!(
+            "Service action '{}' failed for '{}': {}",
+            action, service_name, e
+        )
+    })?;
 
     if result.exit_code != 0 {
         let err_detail = if !result.stderr.trim().is_empty() {
@@ -279,7 +312,10 @@ fn manage_windows_service_powershell(service_name: &str, action: &str) -> Result
             display_name: parsed.display_name,
             status: parsed.status,
             start_type: parsed.start_type,
-            message: format!("Service '{}' {} completed successfully", service_name, action),
+            message: format!(
+                "Service '{}' {} completed successfully",
+                service_name, action
+            ),
         })
     } else {
         // Fallback status if JSON parsing fails but command succeeded
@@ -301,7 +337,11 @@ fn manage_unix_service_fallback(
     use std::process::Command;
 
     // Try systemctl first (Linux)
-    if let Ok(output) = Command::new("systemctl").arg("is-active").arg(service_name).output() {
+    if let Ok(output) = Command::new("systemctl")
+        .arg("is-active")
+        .arg(service_name)
+        .output()
+    {
         let status_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let is_active = output.status.success() && status_str == "active";
         let status = if is_active {
@@ -322,13 +362,20 @@ fn manage_unix_service_fallback(
             });
         } else {
             // Attempt systemctl action
-            let act_res = Command::new("systemctl").arg(action).arg(service_name).output();
+            let act_res = Command::new("systemctl")
+                .arg(action)
+                .arg(service_name)
+                .output();
             match act_res {
                 Ok(act_out) if act_out.status.success() => {
                     return Ok(ServiceStatusResult {
                         name: service_name.to_string(),
                         display_name: service_name.to_string(),
-                        status: if action == "stop" { "Stopped".to_string() } else { "Running".to_string() },
+                        status: if action == "stop" {
+                            "Stopped".to_string()
+                        } else {
+                            "Running".to_string()
+                        },
                         start_type: "Systemd".to_string(),
                         message: format!("Systemd service '{}' {} completed", service_name, action),
                     });
@@ -364,6 +411,9 @@ fn manage_unix_service_fallback(
         display_name: format!("{} Service", service_name),
         status: "Stopped".to_string(),
         start_type: "Manual".to_string(),
-        message: format!("Simulated service inspection for '{}' (action: {})", service_name, action),
+        message: format!(
+            "Simulated service inspection for '{}' (action: {})",
+            service_name, action
+        ),
     })
 }

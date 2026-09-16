@@ -11,7 +11,10 @@ fn test_mouse_move_pixel_protocol_serialization() {
     assert!(json_str.contains("1080"));
 
     let deser: DesktopInputEvent = serde_json::from_str(&json_str).unwrap();
-    assert_eq!(deser, DesktopInputEvent::MouseMovePixel { x: 1920, y: 1080 });
+    assert_eq!(
+        deser,
+        DesktopInputEvent::MouseMovePixel { x: 1920, y: 1080 }
+    );
 }
 
 #[tokio::test]
@@ -46,7 +49,11 @@ async fn test_computer_use_mouse_tools_coord_modes() {
             }),
         )
         .await;
-    assert!(click_res.is_ok(), "mouse_click failed: {:?}", click_res.err());
+    assert!(
+        click_res.is_ok(),
+        "mouse_click failed: {:?}",
+        click_res.err()
+    );
     let click_val = click_res.unwrap();
     assert_eq!(click_val["success"], true);
     assert_eq!(click_val["button"], 0);
@@ -81,7 +88,11 @@ async fn test_computer_use_mouse_tools_coord_modes() {
             }),
         )
         .await;
-    assert!(scroll_res.is_ok(), "mouse_scroll failed: {:?}", scroll_res.err());
+    assert!(
+        scroll_res.is_ok(),
+        "mouse_scroll failed: {:?}",
+        scroll_res.err()
+    );
     let scroll_val = scroll_res.unwrap();
     assert_eq!(scroll_val["success"], true);
     assert_eq!(scroll_val["delta_y"], -120);
@@ -96,7 +107,10 @@ async fn test_capture_screen_downsampling_and_crop() {
     let base_res = executor.execute("capture_screen", json!({})).await;
     if let Err(e) = &base_res {
         // May fail in headless CI environments without a physical display
-        eprintln!("Skipping screen capture test in headless environment: {}", e);
+        eprintln!(
+            "Skipping screen capture test in headless environment: {}",
+            e
+        );
         return;
     }
     let base_val = base_res.unwrap();

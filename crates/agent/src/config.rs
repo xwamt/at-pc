@@ -225,7 +225,6 @@ impl AgentConfig {
         Ok(path)
     }
 
-
     /// Resolves the effective device ID (either configured explicitly or generated deterministically from hostname + MAC).
     pub fn resolve_device_id(&self) -> String {
         if self.device.device_id != "auto" && !self.device.device_id.trim().is_empty() {
@@ -285,7 +284,10 @@ impl AgentConfig {
             .unwrap_or_else(|_| "user".to_string());
 
         let ips = get_local_ips();
-        let lan_ip = ips.first().cloned().unwrap_or_else(|| "127.0.0.1".to_string());
+        let lan_ip = ips
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "127.0.0.1".to_string());
 
         let os_name = System::name().unwrap_or_else(|| std::env::consts::OS.to_string());
         let os_version_str = System::os_version().unwrap_or_default();

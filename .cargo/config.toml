@@ -1,0 +1,30 @@
+# Host vs cross-compile artifacts must not share one fingerprint tree.
+#
+# Cargo writes fingerprints under $CARGO_TARGET_DIR. A single `target/` that
+# mixes host debug/release with x86_64-pc-windows-gnu and
+# x86_64-pc-windows-msvc is what grew this workspace to tens of GB.
+#
+# Do NOT set [build] target-dir here: one baked-in dir still mixes host
+# artifacts with `--target` subdirs. Do NOT add rustflags here (crate/CI
+# flags stay where they are).
+#
+# Convention — export CARGO_TARGET_DIR before cargo (or override per command):
+#   macOS host:            CARGO_TARGET_DIR=target/mac
+#   Linux host:            CARGO_TARGET_DIR=target/linux
+#   Windows host / cross:  CARGO_TARGET_DIR=target/win
+#
+# Examples:
+#   CARGO_TARGET_DIR=target/mac cargo test --workspace --locked
+#   CARGO_TARGET_DIR=target/win cargo build-win-gnu --release --locked
+#
+# Optional local cleanup (never `cargo clean` the mixed legacy `target/`
+# without confirmation): `cargo install cargo-sweep`, then
+# `cargo sweep -s` / `cargo clean -p <crate>` inside the isolated dir.
+# See docs/build-target-dirs.md.
+
+[alias]
+# Aliases do not switch CARGO_TARGET_DIR. Export target/win first.
+build-win-gnu = "build --target x86_64-pc-windows-gnu"
+build-win-msvc = "build --target x86_64-pc-windows-msvc"
+check-win-gnu = "check --target x86_64-pc-windows-gnu"
+check-win-msvc = "check --target x86_64-pc-windows-msvc"

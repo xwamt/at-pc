@@ -4,10 +4,11 @@
 //! - `router.start_desktop_stream` dispatches `ServerToAgentMessage::StartDesktopStream` with specified `display_index`
 //! - `api_get_desktop_frame` and `api_get_desktop_frame_raw` return `display_index` for multi-monitor video feeds
 
-use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use base64::Engine;
 use serde_json::json;
+use std::sync::Arc;
 use tower::ServiceExt;
 
 use at_pc_protocol::messages::{BinaryDesktopFrame, ServerToAgentMessage};
@@ -43,11 +44,14 @@ async fn test_router_start_desktop_stream_dispatches_specified_display_index() {
 
     // Test primary display 0
     router
-        .start_desktop_stream("term-stream-router", 15, 60, 0)
+        .start_desktop_stream("term-stream-router", 15, 60, 0, 1.0)
         .await
         .expect("start_desktop_stream should succeed");
 
-    let msg = rx.recv().await.expect("Expected StartDesktopStream message");
+    let msg = rx
+        .recv()
+        .await
+        .expect("Expected StartDesktopStream message");
     match msg {
         ServerToAgentMessage::StartDesktopStream {
             display_index,
@@ -65,11 +69,14 @@ async fn test_router_start_desktop_stream_dispatches_specified_display_index() {
 
     // Test secondary display 1 with custom fps and quality
     router
-        .start_desktop_stream("term-stream-router", 30, 85, 1)
+        .start_desktop_stream("term-stream-router", 30, 85, 1, 1.0)
         .await
         .expect("start_desktop_stream should succeed");
 
-    let msg2 = rx.recv().await.expect("Expected StartDesktopStream message");
+    let msg2 = rx
+        .recv()
+        .await
+        .expect("Expected StartDesktopStream message");
     match msg2 {
         ServerToAgentMessage::StartDesktopStream {
             display_index,
@@ -87,11 +94,14 @@ async fn test_router_start_desktop_stream_dispatches_specified_display_index() {
 
     // Test tertiary display 2 with 0 fps/quality fallback
     router
-        .start_desktop_stream("term-stream-router", 0, 0, 2)
+        .start_desktop_stream("term-stream-router", 0, 0, 2, 1.0)
         .await
         .expect("start_desktop_stream should succeed");
 
-    let msg3 = rx.recv().await.expect("Expected StartDesktopStream message");
+    let msg3 = rx
+        .recv()
+        .await
+        .expect("Expected StartDesktopStream message");
     match msg3 {
         ServerToAgentMessage::StartDesktopStream {
             display_index,
@@ -104,6 +114,21 @@ async fn test_router_start_desktop_stream_dispatches_specified_display_index() {
             assert_eq!(quality, 60, "0 quality should fallback to 60");
         }
         _ => panic!("Expected StartDesktopStream, got {:?}", msg3),
+    }
+
+    router
+        .start_desktop_stream("term-stream-router", 15, 60, 0, 0.5)
+        .await
+        .expect("start_desktop_stream should succeed");
+    let msg4 = rx
+        .recv()
+        .await
+        .expect("Expected StartDesktopStream message");
+    match msg4 {
+        ServerToAgentMessage::StartDesktopStream { scale, .. } => {
+            assert_eq!(scale, 0.5, "router must pass protocol scale through");
+        }
+        _ => panic!("Expected StartDesktopStream, got {:?}", msg4),
     }
 }
 
@@ -125,7 +150,8 @@ async fn test_api_start_desktop_stream_accepts_display_index_payload() {
     let req_body = json!({
         "fps": 20,
         "quality": 75,
-        "display_index": 1
+        "display_index": 1,
+        "scale": 0.75
     });
     let req = Request::builder()
         .uri("/api/terminals/term-api-stream/desktop/stream")
@@ -137,7 +163,9 @@ async fn test_api_start_desktop_stream_accepts_display_index_payload() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(body_json["success"], true);
 
@@ -147,11 +175,15 @@ async fn test_api_start_desktop_stream_accepts_display_index_payload() {
             display_index,
             fps,
             quality,
-            ..
+            scale,
         } => {
-            assert_eq!(display_index, 1, "Agent must receive specified display_index");
+            assert_eq!(
+                display_index, 1,
+                "Agent must receive specified display_index"
+            );
             assert_eq!(fps, 20);
             assert_eq!(quality, 75);
+            assert_eq!(scale, 0.75, "dashboard must pass scale through to agent");
         }
         _ => panic!("Expected StartDesktopStream, got {:?}", received),
     }
@@ -173,8 +205,13 @@ async fn test_api_start_desktop_stream_accepts_display_index_payload() {
 
     let received2 = rx.recv().await.expect("Expected message on channel");
     match received2 {
-        ServerToAgentMessage::StartDesktopStream { display_index, .. } => {
+        ServerToAgentMessage::StartDesktopStream {
+            display_index,
+            scale,
+            ..
+        } => {
             assert_eq!(display_index, 0, "Omitted display_index must default to 0");
+            assert_eq!(scale, 1.0, "Omitted scale must default to 1.0");
         }
         _ => panic!("Expected StartDesktopStream, got {:?}", received2),
     }
@@ -195,11 +232,15 @@ async fn test_api_start_desktop_stream_accepts_display_index_payload() {
             display_index,
             fps,
             quality,
-            ..
+            scale,
         } => {
-            assert_eq!(display_index, 0, "Empty payload must default to display_index 0");
+            assert_eq!(
+                display_index, 0,
+                "Empty payload must default to display_index 0"
+            );
             assert_eq!(fps, 15);
             assert_eq!(quality, 60);
+            assert_eq!(scale, 1.0, "Empty payload must default to scale 1.0");
         }
         _ => panic!("Expected StartDesktopStream, got {:?}", received3),
     }
@@ -220,14 +261,16 @@ async fn test_api_get_desktop_frame_returns_display_index() {
     registry.register(term, tx).await;
 
     // Simulate Agent delivering desktop frame for secondary monitor (display_index = 1)
-    router.handle_desktop_frame(
+    let fake_jpeg = b"mock_display1_data".to_vec();
+    router.handle_desktop_frame_binary(
         "term-frame-test",
-        1,
-        2560,
-        1440,
-        "jpeg",
-        "mock_base64_display1_data",
-        1001,
+        BinaryDesktopFrame {
+            display_index: 1,
+            width: 2560,
+            height: 1440,
+            timestamp: 1001,
+            data: fake_jpeg.clone(),
+        },
     );
 
     // 3.1 JSON Frame API: GET /api/terminals/:id/desktop/frame
@@ -240,14 +283,22 @@ async fn test_api_get_desktop_frame_returns_display_index() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(body_json["success"], true);
-    assert_eq!(body_json["display_index"], 1, "Frame JSON must include display_index = 1");
+    assert_eq!(
+        body_json["display_index"], 1,
+        "Frame JSON must include display_index = 1"
+    );
     assert_eq!(body_json["width"], 2560);
     assert_eq!(body_json["height"], 1440);
     assert_eq!(body_json["format"], "jpeg");
-    assert_eq!(body_json["data"], "mock_base64_display1_data");
+    assert_eq!(
+        body_json["data"],
+        base64::prelude::BASE64_STANDARD.encode(&fake_jpeg)
+    );
     assert_eq!(body_json["timestamp"], 1001);
 
     // 3.2 Raw JPEG Frame API: GET /api/terminals/:id/desktop/frame.jpg
@@ -260,21 +311,38 @@ async fn test_api_get_desktop_frame_returns_display_index() {
     let resp_raw = app.clone().oneshot(req_raw).await.unwrap();
     assert_eq!(resp_raw.status(), StatusCode::OK);
     assert_eq!(
-        resp_raw.headers().get("X-Display-Index").unwrap().to_str().unwrap(),
+        resp_raw
+            .headers()
+            .get("X-Display-Index")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "1",
         "Raw frame headers must include X-Display-Index: 1"
     );
     assert_eq!(
-        resp_raw.headers().get("X-Frame-Width").unwrap().to_str().unwrap(),
+        resp_raw
+            .headers()
+            .get("X-Frame-Width")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "2560"
     );
     assert_eq!(
-        resp_raw.headers().get("X-Frame-Height").unwrap().to_str().unwrap(),
+        resp_raw
+            .headers()
+            .get("X-Frame-Height")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "1440"
     );
 
     // 3.3 Switch display: Simulate Agent delivering binary frame for display 0
-    let fake_jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0xFF, 0xD9];
+    let fake_jpeg = vec![
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0xFF, 0xD9,
+    ];
     router.handle_desktop_frame_binary(
         "term-frame-test",
         BinaryDesktopFrame {
@@ -295,11 +363,75 @@ async fn test_api_get_desktop_frame_returns_display_index() {
     let resp_switched = app.oneshot(req_switched).await.unwrap();
     assert_eq!(resp_switched.status(), StatusCode::OK);
 
-    let body_switched = axum::body::to_bytes(resp_switched.into_body(), 1024 * 1024).await.unwrap();
+    let body_switched = axum::body::to_bytes(resp_switched.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let json_switched: serde_json::Value = serde_json::from_slice(&body_switched).unwrap();
     assert_eq!(json_switched["success"], true);
-    assert_eq!(json_switched["display_index"], 0, "Frame must reflect switch to display_index = 0");
+    assert_eq!(
+        json_switched["display_index"], 0,
+        "Frame must reflect switch to display_index = 0"
+    );
     assert_eq!(json_switched["width"], 1920);
     assert_eq!(json_switched["height"], 1080);
     assert_eq!(json_switched["timestamp"], 1002);
+}
+
+#[tokio::test]
+async fn empty_keepalive_frame_does_not_clobber_cached_jpeg() {
+    let registry = Arc::new(TerminalRegistry::new());
+    let router = Arc::new(McpRouter::new(registry.clone()));
+    let jpeg = b"real-jpeg-bytes".to_vec();
+    router.handle_desktop_frame_binary(
+        "term-keepalive",
+        BinaryDesktopFrame {
+            display_index: 0,
+            width: 1280,
+            height: 720,
+            timestamp: 1000,
+            data: jpeg.clone(),
+        },
+    );
+    router.handle_desktop_frame_binary(
+        "term-keepalive",
+        BinaryDesktopFrame {
+            display_index: 0,
+            width: 1280,
+            height: 720,
+            timestamp: 2000,
+            data: Vec::new(),
+        },
+    );
+
+    let raw = router
+        .get_latest_desktop_frame_raw("term-keepalive")
+        .await
+        .expect("cached frame");
+    assert_eq!(
+        raw.4, jpeg,
+        "keepalive must not replace JPEG with empty data"
+    );
+    assert_eq!(raw.3, 2000, "keepalive may refresh the timestamp");
+}
+
+#[tokio::test]
+async fn empty_keepalive_without_cache_does_not_insert_frame() {
+    let registry = Arc::new(TerminalRegistry::new());
+    let router = Arc::new(McpRouter::new(registry.clone()));
+    router.handle_desktop_frame_binary(
+        "term-empty-ka",
+        BinaryDesktopFrame {
+            display_index: 0,
+            width: 1280,
+            height: 720,
+            timestamp: 1000,
+            data: Vec::new(),
+        },
+    );
+
+    let raw = router.get_latest_desktop_frame_raw("term-empty-ka").await;
+    assert!(
+        raw.is_none(),
+        "empty keepalive with no cache must not insert raw_bytes"
+    );
 }

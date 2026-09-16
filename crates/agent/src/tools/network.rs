@@ -109,8 +109,16 @@ fn list_windows_network_connections(
             }
         }
 
-        let local_port = local.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(0);
-        let remote_port = remote.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(0);
+        let local_port = local
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(0);
+        let remote_port = remote
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(0);
 
         if let Some(pf) = port_filter {
             if local_port != pf && remote_port != pf {

@@ -146,12 +146,11 @@ pub struct StateDiff {
     pub ui_diff: Option<UiStateDiff>,
 }
 
-
 /// Individual visual mark in Set-of-Mark (SoM) annotated screen
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScreenMark {
     pub id: u32,
-    pub rect: [i32; 4], // [x, y, width, height]
+    pub rect: [i32; 4],   // [x, y, width, height]
     pub center: [i32; 2], // [x, y]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -196,5 +195,3 @@ pub struct MonitorInfo {
     pub height: u32,
     pub scale_factor: f64,
 }
-
-

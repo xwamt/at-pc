@@ -47,7 +47,10 @@ fn test_heartbeat_messages_serialization() {
     assert!(json.contains("node-1"));
     let deserialized: AgentToServerMessage = serde_json::from_str(&json).unwrap();
     match deserialized {
-        AgentToServerMessage::Heartbeat { terminal_id, metrics: m } => {
+        AgentToServerMessage::Heartbeat {
+            terminal_id,
+            metrics: m,
+        } => {
             assert_eq!(terminal_id, "node-1");
             assert_eq!(m.cpu_usage_percent, 25.5);
             assert_eq!(m.memory_used_mb, 4096);
@@ -132,7 +135,10 @@ fn test_disconnect_and_cancel_serialization() {
     let disc_json = serde_json::to_string(&disconnect).unwrap();
     let deserialized_disc: AgentToServerMessage = serde_json::from_str(&disc_json).unwrap();
     match deserialized_disc {
-        AgentToServerMessage::Disconnect { terminal_id, reason } => {
+        AgentToServerMessage::Disconnect {
+            terminal_id,
+            reason,
+        } => {
             assert_eq!(terminal_id, "test-pc-01");
             assert_eq!(reason, "User requested disconnect");
         }
@@ -209,37 +215,7 @@ fn test_tool_payloads_serialization() {
 fn test_desktop_streaming_and_input_serialization() {
     use at_pc_protocol::models::DesktopInputEvent;
 
-    // 1. DesktopFrame
-    let frame = AgentToServerMessage::DesktopFrame {
-        display_index: 0,
-        width: 1920,
-        height: 1080,
-        format: "jpeg".to_string(),
-        data: "base64data...".to_string(),
-        timestamp: 1725180000,
-    };
-    let frame_json = serde_json::to_string(&frame).unwrap();
-    let deser_frame: AgentToServerMessage = serde_json::from_str(&frame_json).unwrap();
-    match deser_frame {
-        AgentToServerMessage::DesktopFrame {
-            display_index,
-            width,
-            height,
-            format,
-            data,
-            timestamp,
-        } => {
-            assert_eq!(display_index, 0);
-            assert_eq!(width, 1920);
-            assert_eq!(height, 1080);
-            assert_eq!(format, "jpeg");
-            assert_eq!(data, "base64data...");
-            assert_eq!(timestamp, 1725180000);
-        }
-        _ => panic!("Expected DesktopFrame"),
-    }
-
-    // 2. StartDesktopStream
+    // 1. StartDesktopStream
     let start_msg = ServerToAgentMessage::StartDesktopStream {
         display_index: 0,
         fps: 15,
@@ -340,7 +316,10 @@ fn test_ui_element_and_tree_response_serialization() {
     assert_eq!(deserialized.total_elements, 2);
     assert_eq!(deserialized.elements[0].id, 1);
     assert_eq!(deserialized.elements[0].control_type, "Button");
-    assert_eq!(deserialized.elements[1].value, Some("test_query".to_string()));
+    assert_eq!(
+        deserialized.elements[1].value,
+        Some("test_query".to_string())
+    );
     assert_eq!(deserialized.display_index, None);
 
     // Test serialization with display_index Some(1)
@@ -522,5 +501,3 @@ fn test_monitor_info_serialization() {
     let deserialized: MonitorInfo = serde_json::from_str(&json_str).unwrap();
     assert_eq!(deserialized, monitor);
 }
-
-

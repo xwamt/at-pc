@@ -1,14 +1,21 @@
-#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+#![cfg_attr(
+    all(target_os = "windows", feature = "gui"),
+    windows_subsystem = "windows"
+)]
 
 //! `at-pc-agent` executable entrypoint.
-//! Loads configuration, establishes WebSocket connection with the central server,
-//! broadcasts live execution metrics and tool logs to the UI state,
-//! and renders the egui desktop interface.
+//! Loads configuration, establishes WebSocket connections with the central server,
+//! and runs either the headless service loop or the optional desktop GUI.
 
-use at_pc_agent::app::{run_agent_app, AgentAppState};
 use at_pc_agent::config::AgentConfig;
+
+#[cfg(feature = "gui")]
+use at_pc_agent::app::{run_agent_app, AgentAppState};
+#[cfg(feature = "gui")]
 use at_pc_agent::executor::AgentExecutor;
+#[cfg(feature = "gui")]
 use at_pc_agent::ws_client::AgentWsClient;
+#[cfg(feature = "gui")]
 use std::sync::Arc;
 
 #[tokio::main]
@@ -17,7 +24,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let log_file_path = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("at-pc-agent.log")))
-        .or_else(|| std::env::current_dir().ok().map(|p| p.join("at-pc-agent.log")))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.join("at-pc-agent.log"))
+        })
         .unwrap_or_else(|| std::env::temp_dir().join("at-pc-agent.log"));
 
     let file_appender = std::fs::OpenOptions::new()
@@ -26,7 +37,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .open(&log_file_path)
         .or_else(|_| {
             let temp_p = std::env::temp_dir().join("at-pc-agent.log");
-            std::fs::OpenOptions::new().create(true).append(true).open(temp_p)
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(temp_p)
         })
         .ok();
 
@@ -72,12 +86,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     #[cfg(windows)]
     unsafe {
-        // If launched with CLI arguments on Windows, attach to parent console so CLI output is visible
-        if std::env::args().len() > 1 {
-            use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
-            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        #[cfg(feature = "gui")]
+        {
+            // GUI builds use the Windows subsystem, so attach to the parent console for CLI runs.
+            if std::env::args().len() > 1 {
+                use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+                let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+            }
         }
 
+        // Screenshot and input coordinates need consistent DPI behavior in GUI and headless modes.
         use windows_sys::Win32::UI::HiDpi::{
             SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
         };
@@ -93,13 +111,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("OPTIONS:");
         println!("    -c, --config <PATH>       Path to TOML configuration file");
         println!("    -s, --server <URL>        Server WebSocket URL override (e.g. ws://192.168.1.100:9801/ws)");
-        println!("    -H, --headless            Run in headless background service mode without GUI");
+        println!(
+            "    -H, --headless            Run in headless background service mode without GUI"
+        );
         println!("        --service             Alias for --headless");
         println!("    --enable-computer-use     Enable simulated mouse and keyboard MCP tools");
         println!("    --ca-cert <PATH>          Path to CA certificate for TLS/WSS verification");
         println!("    --client-cert <PATH>      Path to client certificate for mTLS");
         println!("    --client-key <PATH>       Path to client private key for mTLS");
-        println!("    --insecure                Skip TLS server certificate verification (testing only)");
+        println!(
+            "    --insecure                Skip TLS server certificate verification (testing only)"
+        );
         println!("    -h, --help                Print help information\n");
         println!("ENVIRONMENT VARIABLES:");
         println!("    AT_PC_HEADLESS=1          Run in headless background service mode");
@@ -110,8 +132,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let mut custom_config_path = None;
     let mut cli_server_url = None;
-    let mut headless = std::env::var("AT_PC_HEADLESS").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
-        || std::env::var("AT_PC_SERVICE").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let mut headless = std::env::var("AT_PC_HEADLESS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+        || std::env::var("AT_PC_SERVICE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
     let mut cli_enable_cu = false;
     let mut cli_ca_cert = None;
     let mut cli_client_cert = None;
@@ -172,6 +198,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return at_pc_agent::run_headless(config).await;
     }
 
+    #[cfg(feature = "gui")]
+    {
+        run_gui(config).await
+    }
+
+    #[cfg(not(feature = "gui"))]
+    {
+        tracing::info!("GUI feature is disabled; starting agent in headless mode...");
+        at_pc_agent::run_headless(config).await
+    }
+}
+
+#[cfg(feature = "gui")]
+async fn run_gui(config: AgentConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let terminal_info = config.to_terminal_info();
     let server_url = config.server.url.clone();
     let auth_token = config.server.auth_token.clone();
@@ -185,11 +225,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.enable_computer_use
     );
 
-    // 3. Create UI State
-    let state = Arc::new(
-        AgentAppState::new(server_url.clone())
-            .with_terminal_info(terminal_info.clone())
-    );
+    let state =
+        Arc::new(AgentAppState::new(server_url.clone()).with_terminal_info(terminal_info.clone()));
 
     state.add_audit_log(
         "agent_startup",
@@ -200,7 +237,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "STARTED",
     );
 
-    // 4. Create Executor & WS Client
     let executor = Arc::new(AgentExecutor::default().with_computer_use(config.enable_computer_use));
     let ws_client = Arc::new(
         AgentWsClient::new(server_url, terminal_info, executor)
@@ -217,18 +253,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     state.register_ws_client(ws_client.clone());
 
-    // 5. Spawn background WS Client task
     let client = ws_client.clone();
     let client_task = tokio::spawn(async move {
         client.run().await;
     });
 
-    // 6. Launch desktop GUI window on main thread
+    // Keep native window creation on the main thread.
     if let Err(e) = run_agent_app(state.clone()) {
         tracing::error!("Agent GUI error: {}", e);
     }
 
-    // 7. Gracefully disconnect and exit on window close
     tracing::info!("GUI closed. Disconnecting agent...");
     client_task.abort();
     let _ = tokio::time::timeout(

@@ -5,15 +5,15 @@
 //! - Case 2: Negative Origin Dual-Monitor (Monitor 0: 2560x1440 at (0,0); Monitor 1: 1080x1920 at (-1080, 0))
 //! - Case 3: Mixed High-DPI Dual-Monitor (Monitor 0: 3840x2160 at (0,0) scale 2.0; Monitor 1: 1920x1080 at (3840, 0) scale 1.0)
 
-use std::sync::Mutex;
 use at_pc_agent::executor::AgentExecutor;
 use at_pc_agent::tools::screen::{reset_mock_monitors, set_mock_monitors};
 use at_pc_agent::tools::uia::find_display_index_for_bounds;
 use at_pc_agent::tools::window::{list_windows, reset_window_mocks, set_mock_windows};
 use at_pc_protocol::models::{MonitorInfo, WindowInfo};
 use serde_json::json;
+use tokio::sync::Mutex;
 
-static SUITE_LOCK: Mutex<()> = Mutex::new(());
+static SUITE_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// Case 1: Horizontal Dual-Monitor
 /// Monitor 0: 1920x1080 at (0, 0)
@@ -117,7 +117,7 @@ fn create_sample_window(hwnd: usize, title: &str, rect: [i32; 4]) -> WindowInfo 
 // =========================================================================
 #[tokio::test]
 async fn test_case1_horizontal_dual_monitor_coordinates() {
-    let _guard = SUITE_LOCK.lock().unwrap();
+    let _guard = SUITE_LOCK.lock().await;
     reset_mock_monitors();
     set_mock_monitors(Some(create_horizontal_dual_topology()));
 
@@ -249,7 +249,7 @@ async fn test_case1_horizontal_dual_monitor_coordinates() {
 // =========================================================================
 #[tokio::test]
 async fn test_case2_negative_origin_dual_monitor_coordinates() {
-    let _guard = SUITE_LOCK.lock().unwrap();
+    let _guard = SUITE_LOCK.lock().await;
     reset_mock_monitors();
     set_mock_monitors(Some(create_negative_origin_topology()));
 
@@ -367,7 +367,7 @@ async fn test_case2_negative_origin_dual_monitor_coordinates() {
 // =========================================================================
 #[tokio::test]
 async fn test_case3_mixed_hidpi_dual_monitor_coordinates() {
-    let _guard = SUITE_LOCK.lock().unwrap();
+    let _guard = SUITE_LOCK.lock().await;
     reset_mock_monitors();
     set_mock_monitors(Some(create_mixed_hidpi_topology()));
 
@@ -459,7 +459,7 @@ async fn test_case3_mixed_hidpi_dual_monitor_coordinates() {
 // =========================================================================
 #[tokio::test]
 async fn test_mouse_drag_start_and_end_with_display_index() {
-    let _guard = SUITE_LOCK.lock().unwrap();
+    let _guard = SUITE_LOCK.lock().await;
     reset_mock_monitors();
 
     let executor = AgentExecutor::new().with_computer_use(true);
@@ -538,7 +538,7 @@ async fn test_mouse_drag_start_and_end_with_display_index() {
 // =========================================================================
 #[test]
 fn test_list_windows_display_attribution_topologies() {
-    let _guard = SUITE_LOCK.lock().unwrap();
+    let _guard = SUITE_LOCK.blocking_lock();
     reset_mock_monitors();
     reset_window_mocks();
 
@@ -560,13 +560,24 @@ fn test_list_windows_display_attribution_topologies() {
     assert_eq!(listed.len(), 3);
 
     let w1 = listed.iter().find(|w| w.hwnd == 1).unwrap();
-    assert_eq!(w1.display_index, Some(0), "Window on Mon 0 should be attributed to display_index 0");
+    assert_eq!(
+        w1.display_index,
+        Some(0),
+        "Window on Mon 0 should be attributed to display_index 0"
+    );
 
     let w2 = listed.iter().find(|w| w.hwnd == 2).unwrap();
-    assert_eq!(w2.display_index, Some(1), "Window on negative Mon 1 should be attributed to display_index 1");
+    assert_eq!(
+        w2.display_index,
+        Some(1),
+        "Window on negative Mon 1 should be attributed to display_index 1"
+    );
 
     let w3 = listed.iter().find(|w| w.hwnd == 3).unwrap();
-    assert_eq!(w3.display_index, None, "Off-screen window should have None display_index");
+    assert_eq!(
+        w3.display_index, None,
+        "Off-screen window should have None display_index"
+    );
 
     // 5.2 Horizontal Dual Topology attribution
     // Mon 0: (0, 0, 1920, 1080), Mon 1: (1920, 0, 1920, 1080)
@@ -599,28 +610,46 @@ fn test_list_windows_display_attribution_topologies() {
 // =========================================================================
 #[test]
 fn test_find_display_index_for_bounds_uia_module() {
-    let _guard = SUITE_LOCK.lock().unwrap();
+    let _guard = SUITE_LOCK.blocking_lock();
     reset_mock_monitors();
 
     // 6.1 Horizontal Dual-Monitor
     set_mock_monitors(Some(create_horizontal_dual_topology()));
 
     // Center at (350, 300) -> on Monitor 0
-    assert_eq!(find_display_index_for_bounds(&[100, 100, 500, 400]), Some(0));
+    assert_eq!(
+        find_display_index_for_bounds(&[100, 100, 500, 400]),
+        Some(0)
+    );
     // Center at (2250, 300) -> on Monitor 1
-    assert_eq!(find_display_index_for_bounds(&[2000, 100, 500, 400]), Some(1));
+    assert_eq!(
+        find_display_index_for_bounds(&[2000, 100, 500, 400]),
+        Some(1)
+    );
     // Center at (10050, 10050) -> Off-screen
-    assert_eq!(find_display_index_for_bounds(&[10000, 10000, 100, 100]), None);
+    assert_eq!(
+        find_display_index_for_bounds(&[10000, 10000, 100, 100]),
+        None
+    );
 
     // 6.2 Negative Origin Dual-Monitor
     set_mock_monitors(Some(create_negative_origin_topology()));
 
     // Center at (500, 400) -> on Monitor 0 (0..2560, 0..1440)
-    assert_eq!(find_display_index_for_bounds(&[200, 200, 600, 400]), Some(0));
+    assert_eq!(
+        find_display_index_for_bounds(&[200, 200, 600, 400]),
+        Some(0)
+    );
     // Center at (-700, 450) -> on Monitor 1 (-1080..0, 0..1920)
-    assert_eq!(find_display_index_for_bounds(&[-900, 200, 400, 500]), Some(1));
+    assert_eq!(
+        find_display_index_for_bounds(&[-900, 200, 400, 500]),
+        Some(1)
+    );
     // Boundary check near top-left of negative monitor: rect [-1080, 0, 100, 100] -> center (-1030, 50)
-    assert_eq!(find_display_index_for_bounds(&[-1080, 0, 100, 100]), Some(1));
+    assert_eq!(
+        find_display_index_for_bounds(&[-1080, 0, 100, 100]),
+        Some(1)
+    );
     // Boundary check right outside left of negative monitor: rect [-1200, 0, 100, 100] -> center (-1150, 50)
     assert_eq!(find_display_index_for_bounds(&[-1200, 0, 100, 100]), None);
 

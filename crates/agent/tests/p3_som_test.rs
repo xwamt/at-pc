@@ -6,15 +6,13 @@ use at_pc_agent::executor::AgentExecutor;
 use at_pc_agent::tools::computer_use::execute_mouse_click;
 use at_pc_agent::tools::som::{
     annotate_image_with_marks, cached_marks_count, clear_and_store_marks, click_mark,
-    detect_visual_boxes, draw_filled_rect, draw_rect_outline,
-    generate_marked_screen_from_image, generate_marked_screen_from_image_ext,
-    generate_marks_from_grid, generate_marks_from_ui_elements,
-    get_cached_mark, get_marked_screen, reset_mark_cache, set_mock_screen_image, store_cached_marks,
+    detect_visual_boxes, draw_filled_rect, draw_rect_outline, generate_marked_screen_from_image,
+    generate_marked_screen_from_image_ext, generate_marks_from_grid,
+    generate_marks_from_ui_elements, get_cached_mark, get_marked_screen, reset_mark_cache,
+    set_mock_screen_image, store_cached_marks,
 };
 use at_pc_agent::tools::uia::{click_element, reset_element_cache};
-use at_pc_agent::tools::window::{
-    reset_window_mocks, set_mock_active_window, WindowState,
-};
+use at_pc_agent::tools::window::{reset_window_mocks, set_mock_active_window, WindowState};
 use at_pc_protocol::models::{ScreenMark, UiElement};
 use image::{DynamicImage, Rgba, RgbaImage};
 use serde_json::json;
@@ -59,7 +57,7 @@ async fn test_mark_cache_crud_and_lookup() {
         label: None,
         control_type: Some("Icon".to_string()),
     };
-    clear_and_store_marks(&[mark3.clone()]);
+    clear_and_store_marks(std::slice::from_ref(&mark3));
     assert_eq!(cached_marks_count(), 1);
     assert!(get_cached_mark(10).is_none());
     assert_eq!(get_cached_mark(30), Some(mark3));
@@ -178,7 +176,10 @@ async fn test_visual_box_detection_on_synthetic_canvas() {
     draw_rect_outline(&mut canvas, 300, 250, 160, 50, 2, Rgba([10, 40, 150, 255]));
 
     let detected = detect_visual_boxes(&canvas, [0, 0], 1.0);
-    assert!(!detected.is_empty(), "Should detect visual boxes on synthetic canvas");
+    assert!(
+        !detected.is_empty(),
+        "Should detect visual boxes on synthetic canvas"
+    );
 
     // Verify at least one detected box approximates Box 1
     let found_b1 = detected.iter().any(|m| {
@@ -327,7 +328,9 @@ async fn test_click_mark_dispatch_and_execution() {
     // 3. Click non-existent mark -> returns descriptive error
     let err_res = click_mark(999, None, None);
     assert!(err_res.is_err());
-    assert!(err_res.unwrap_err().contains("Mark #999 not found in mark cache"));
+    assert!(err_res
+        .unwrap_err()
+        .contains("Mark #999 not found in mark cache"));
 }
 
 #[tokio::test]
@@ -400,9 +403,15 @@ async fn test_executor_som_dispatch_and_permission_toggle() {
     assert!(!executor_disabled.enable_computer_use);
 
     let screen_res = executor_disabled
-        .execute("get_marked_screen", json!({"strategy": "grid", "grid_divisions": 3}))
+        .execute(
+            "get_marked_screen",
+            json!({"strategy": "grid", "grid_divisions": 3}),
+        )
         .await;
-    assert!(screen_res.is_ok(), "get_marked_screen should succeed even with computer_use disabled");
+    assert!(
+        screen_res.is_ok(),
+        "get_marked_screen should succeed even with computer_use disabled"
+    );
 
     let click_err = executor_disabled
         .execute("click_mark", json!({"mark_id": 1}))
@@ -415,7 +424,11 @@ async fn test_executor_som_dispatch_and_permission_toggle() {
     let click_res = executor_enabled
         .execute("click_mark", json!({"mark_id": 1}))
         .await;
-    assert!(click_res.is_ok(), "click_mark should succeed when computer_use is enabled: {:?}", click_res);
+    assert!(
+        click_res.is_ok(),
+        "click_mark should succeed when computer_use is enabled: {:?}",
+        click_res
+    );
 
     set_mock_screen_image(None);
 }
@@ -459,7 +472,9 @@ async fn test_executor_review_loop_attaches_state_diff_to_click_mark() {
         .await
         .expect("click_mark execution failed");
 
-    let diff = res.get("state_diff").expect("click_mark should attach state_diff on window switch");
+    let diff = res
+        .get("state_diff")
+        .expect("click_mark should attach state_diff on window switch");
     assert_eq!(diff["foreground_changed"], true);
     assert_eq!(diff["previous_window"], "Main Dashboard");
     assert_eq!(diff["current_window"], "Settings Dialog");
@@ -480,7 +495,11 @@ async fn test_mouse_click_null_mark_id_fallback_to_coordinates() {
         "y": 400,
         "button": "left"
     }));
-    assert!(res.is_ok(), "mouse_click with null mark_id must succeed by falling through to coordinate click: {:?}", res.err());
+    assert!(
+        res.is_ok(),
+        "mouse_click with null mark_id must succeed by falling through to coordinate click: {:?}",
+        res.err()
+    );
     let val = res.unwrap();
     assert_eq!(val["success"], true);
     assert_eq!(val["action"], "mouse_click");
@@ -501,7 +520,9 @@ async fn test_mouse_click_null_mark_id_fallback_to_coordinates() {
         "mark_id": "not-a-number"
     }));
     assert!(res_err.is_err());
-    assert!(res_err.unwrap_err().contains("Invalid 'mark_id' parameter format"));
+    assert!(res_err
+        .unwrap_err()
+        .contains("Invalid 'mark_id' parameter format"));
 }
 
 #[tokio::test]
@@ -523,7 +544,9 @@ async fn test_click_element_invalid_action_type_error() {
     // Invalid action_type should be rejected upfront before executing the click
     let err = click_element(77, Some("invalid_action_type"));
     assert!(err.is_err());
-    assert!(err.unwrap_err().contains("Invalid action_type 'invalid_action_type'"));
+    assert!(err
+        .unwrap_err()
+        .contains("Invalid action_type 'invalid_action_type'"));
 }
 
 #[tokio::test]
@@ -558,7 +581,10 @@ async fn test_click_mark_numeric_button_support() {
 
     // Executor dispatch with numeric button: 2
     let executor = AgentExecutor::new().with_computer_use(true);
-    let r5 = executor.execute("click_mark", json!({"mark_id": 5, "button": 2})).await.unwrap();
+    let r5 = executor
+        .execute("click_mark", json!({"mark_id": 5, "button": 2}))
+        .await
+        .unwrap();
     assert_eq!(r5["button"], 2);
 }
 
@@ -601,7 +627,10 @@ async fn test_hybrid_strategy_merges_ui_and_visual_marks() {
     .expect("hybrid marking should succeed");
 
     assert_eq!(res.source, "hybrid");
-    assert!(res.total_marks >= 2, "Expected both UI element and visual box marks in hybrid mode");
+    assert!(
+        res.total_marks >= 2,
+        "Expected both UI element and visual box marks in hybrid mode"
+    );
     assert_eq!(res.marks[0].id, 1);
     assert_eq!(res.marks[1].id, 2);
 }
@@ -660,7 +689,11 @@ async fn test_sequential_mark_numbering_across_repeated_captures() {
     let res2 = get_marked_screen(0, "jpeg", 80, None, None, Some("grid"), Some(2), None).unwrap();
     assert_eq!(res2.total_marks, 4);
     let ids2: Vec<u32> = res2.marks.iter().map(|m| m.id).collect();
-    assert_eq!(ids2, vec![1, 2, 3, 4], "Fresh screen capture marks must be sequentially numbered starting at 1");
+    assert_eq!(
+        ids2,
+        vec![1, 2, 3, 4],
+        "Fresh screen capture marks must be sequentially numbered starting at 1"
+    );
 
     set_mock_screen_image(None);
 }
@@ -722,4 +755,3 @@ async fn test_chromatic_contrast_edge_detection() {
         "Chromatic contrast between saturated red and green must be detected despite similar luminance"
     );
 }
-

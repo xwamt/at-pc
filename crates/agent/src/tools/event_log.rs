@@ -63,7 +63,10 @@ fn get_windows_event_logs(
     match get_windows_event_logs_win32(log_name, level, hours_back, limit) {
         Ok(res) => return Ok(res),
         Err(e) => {
-            tracing::debug!("Native Win32 Event Log query failed ({}); falling back to PowerShell", e);
+            tracing::debug!(
+                "Native Win32 Event Log query failed ({}); falling back to PowerShell",
+                e
+            );
         }
     }
 
@@ -139,8 +142,8 @@ fn get_windows_event_logs_win32(
     hours_back: u64,
     limit: usize,
 ) -> Result<EventLogResult, String> {
-    use windows_sys::Win32::System::EventLog::*;
     use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::System::EventLog::*;
 
     unsafe {
         let channel_wide: Vec<u16> = log_name.encode_utf16().chain(std::iter::once(0)).collect();
@@ -219,10 +222,15 @@ fn get_windows_event_logs_win32(
                 }
 
                 if render_ok != 0 {
-                    let xml = String::from_utf16_lossy(&buf[..(buf_used as usize / 2).min(buf.len())]);
-                    let event_id = parse_xml_tag(&xml, "EventID").and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-                    let source = parse_xml_attr(&xml, "Provider", "Name").unwrap_or_else(|| "System".to_string());
-                    let time_gen = parse_xml_attr(&xml, "TimeCreated", "SystemTime").unwrap_or_default();
+                    let xml =
+                        String::from_utf16_lossy(&buf[..(buf_used as usize / 2).min(buf.len())]);
+                    let event_id = parse_xml_tag(&xml, "EventID")
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0);
+                    let source = parse_xml_attr(&xml, "Provider", "Name")
+                        .unwrap_or_else(|| "System".to_string());
+                    let time_gen =
+                        parse_xml_attr(&xml, "TimeCreated", "SystemTime").unwrap_or_default();
                     let raw_level = parse_xml_tag(&xml, "Level").unwrap_or_default();
                     let level_str = match raw_level.as_str() {
                         "1" => "Critical",
@@ -234,7 +242,10 @@ fn get_windows_event_logs_win32(
                     let message = if let Some(data) = extract_event_data(&xml) {
                         format!("{}: {}", source, data)
                     } else {
-                        format!("Event ID {} reported by {} in {}", event_id, source, log_name)
+                        format!(
+                            "Event ID {} reported by {} in {}",
+                            event_id, source, log_name
+                        )
                     };
 
                     entries.push(EventLogEntry {
@@ -370,7 +381,11 @@ fn get_unix_system_logs_fallback(
 ) -> Result<EventLogResult, String> {
     use std::fs;
 
-    let candidate_paths = ["/var/log/system.log", "/var/log/syslog", "/var/log/messages"];
+    let candidate_paths = [
+        "/var/log/system.log",
+        "/var/log/syslog",
+        "/var/log/messages",
+    ];
     let mut events = Vec::new();
 
     for path in candidate_paths {
@@ -393,7 +408,9 @@ fn get_unix_system_logs_fallback(
                         log_name: log_name.to_string(),
                         source: path.to_string(),
                         level: level.to_string(),
-                        time_generated: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                        time_generated: chrono::Local::now()
+                            .format("%Y-%m-%d %H:%M:%S")
+                            .to_string(),
                         message: if line.len() > 250 {
                             format!("{}...", &line[..250])
                         } else {
@@ -416,7 +433,10 @@ fn get_unix_system_logs_fallback(
             source: "SystemLog".to_string(),
             level: level.to_string(),
             time_generated: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-            message: format!("No critical {} events recorded in the specified timeframe", level),
+            message: format!(
+                "No critical {} events recorded in the specified timeframe",
+                level
+            ),
         });
     }
 

@@ -1,0 +1,10 @@
+[package]
+name = "at-pc-build-support"
+version = "1.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Shared Windows resource embedding for at-pc agent and server build.rs"
+
+[lints]
+workspace = true

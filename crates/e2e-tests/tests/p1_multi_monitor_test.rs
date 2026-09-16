@@ -5,8 +5,8 @@
 //! - `get_ui_tree` with display attribution
 //! - MCP schema verification for `display_index` on mouse tools
 
-use std::sync::Arc;
 use serde_json::json;
+use std::sync::Arc;
 
 use at_pc_agent::executor::AgentExecutor;
 use at_pc_agent::tools::screen::{reset_mock_monitors, set_mock_monitors};
@@ -78,7 +78,10 @@ fn test_mcp_tool_definitions_include_display_index_on_mouse_tools() {
         let prop = &props["display_index"];
         assert_eq!(prop["type"], "integer");
         assert!(
-            prop["description"].as_str().unwrap().contains("display index"),
+            prop["description"]
+                .as_str()
+                .unwrap()
+                .contains("display index"),
             "Tool '{}' display_index description must mention display index",
             tool_name
         );
@@ -255,7 +258,8 @@ async fn test_list_windows_returns_display_index_for_multi_displays() {
         .await
         .expect("list_windows should succeed");
 
-    let windows: Vec<WindowInfo> = serde_json::from_value(res).expect("Should deserialize as Vec<WindowInfo>");
+    let windows: Vec<WindowInfo> =
+        serde_json::from_value(res).expect("Should deserialize as Vec<WindowInfo>");
     assert_eq!(windows.len(), 3);
 
     // Verify window on display 0
@@ -307,7 +311,8 @@ async fn test_get_ui_tree_response_contains_display_index() {
         .await
         .expect("get_ui_tree should succeed");
 
-    let tree: UiTreeResponse = serde_json::from_value(res).expect("Should deserialize as UiTreeResponse");
+    let tree: UiTreeResponse =
+        serde_json::from_value(res).expect("Should deserialize as UiTreeResponse");
     // Fallback bounds or desktop bounds resolve to a valid display
     assert!(tree.display_index.is_some());
     assert_eq!(tree.display_index, Some(0));
@@ -377,7 +382,10 @@ async fn test_router_forwards_mouse_click_with_display_index() {
         _ => panic!("Expected InvokeTool variant"),
     }
 
-    let result_val = invoke_handle.await.unwrap().expect("Dispatch should succeed");
+    let result_val = invoke_handle
+        .await
+        .unwrap()
+        .expect("Dispatch should succeed");
     assert_eq!(result_val["success"], true);
     assert_eq!(result_val["display_index"], 1);
     assert_eq!(result_val["x"], 2120);

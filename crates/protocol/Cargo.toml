@@ -2,7 +2,11 @@
 name = "at-pc-protocol"
 version = "1.0.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 description = "Shared communication protocol and models for at-pc C/S architecture"
+
+[lints]
+workspace = true
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

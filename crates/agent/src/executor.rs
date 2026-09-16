@@ -2,11 +2,12 @@
 //! Dispatches tool invocations asynchronously, tracks active calls,
 //! and manages background process lifecycles and cancellation.
 
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::task::AbortHandle;
-use serde_json::Value;
 
+use crate::tools::command::{exec_cmd_with_call_async, exec_powershell_with_call_async};
 use crate::tools::dispatch_tool_with_call_id_and_options;
 use crate::tools::process_registry::ProcessRegistry;
 
@@ -70,7 +71,8 @@ impl AgentExecutor {
     /// Executes an MCP diagnostic tool by name with arguments without explicit call tracking.
     pub async fn execute(&self, tool_name: &str, arguments: Value) -> Result<Value, String> {
         let call_id = format!("anon-{}", chrono::Utc::now().timestamp_micros());
-        self.execute_with_call_id(&call_id, tool_name, arguments).await
+        self.execute_with_call_id(&call_id, tool_name, arguments)
+            .await
     }
 
     /// Executes an MCP diagnostic tool by name with arguments and registers it for cancellation.
@@ -98,15 +100,17 @@ impl AgentExecutor {
             None
         };
 
-        let join_handle = tokio::task::spawn_blocking(move || {
-            dispatch_tool_with_call_id_and_options(
-                &cid_clone,
-                &name,
-                arguments,
-                &registry,
-                enable_cu,
-            )
-        });
+        let join_handle = if matches!(name.as_str(), "exec_cmd" | "exec_powershell") {
+            tokio::spawn(async move {
+                execute_shell_tool(&cid_clone, &name, arguments, &registry).await
+            })
+        } else {
+            tokio::task::spawn_blocking(move || {
+                dispatch_tool_with_call_id_and_options(
+                    &cid_clone, &name, arguments, &registry, enable_cu,
+                )
+            })
+        };
 
         let abort_handle = join_handle.abort_handle();
         {
@@ -134,7 +138,9 @@ impl AgentExecutor {
 
         let final_res = match res {
             Ok(tool_res) => tool_res,
-            Err(e) if e.is_cancelled() => Err(format!("Tool '{}' execution was cancelled", tool_name)),
+            Err(e) if e.is_cancelled() => {
+                Err(format!("Tool '{}' execution was cancelled", tool_name))
+            }
             Err(e) => Err(format!("Task join error: {}", e)),
         };
 
@@ -155,7 +161,8 @@ impl AgentExecutor {
         };
 
         let had_handle = if let Some(ref h) = handle {
-            h.is_cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            h.is_cancelled
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             h.abort_handle.abort();
             true
         } else {
@@ -166,7 +173,11 @@ impl AgentExecutor {
         let killed = self.process_registry.kill_call_processes(call_id);
 
         if had_handle {
-            tracing::info!("Cancelled call [{}] (killed {} subprocesses)", call_id, killed);
+            tracing::info!(
+                "Cancelled call [{}] (killed {} subprocesses)",
+                call_id,
+                killed
+            );
             true
         } else {
             tracing::debug!("Cancel requested for call [{}], but no active handle found (killed {} subprocesses)", call_id, killed);
@@ -180,7 +191,8 @@ impl AgentExecutor {
         let had_handle = {
             if let Ok(mut calls) = self.active_calls.lock() {
                 if let Some(h) = calls.remove(call_id) {
-                    h.is_cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                    h.is_cancelled
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                     h.abort_handle.abort();
                     true
                 } else {
@@ -206,5 +218,46 @@ impl AgentExecutor {
     /// Returns a reference to the process registry.
     pub fn process_registry(&self) -> Arc<ProcessRegistry> {
         self.process_registry.clone()
+    }
+}
+
+async fn execute_shell_tool(
+    call_id: &str,
+    tool_name: &str,
+    arguments: Value,
+    registry: &Arc<ProcessRegistry>,
+) -> Result<Value, String> {
+    let call_id_opt = (!call_id.is_empty()).then_some(call_id);
+    match tool_name {
+        "exec_cmd" => {
+            let command = arguments
+                .get("command")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Missing required parameter 'command'".to_string())?;
+            let timeout_secs = arguments
+                .get("timeout_secs")
+                .and_then(Value::as_u64)
+                .unwrap_or(30);
+            let cwd = arguments.get("cwd").and_then(Value::as_str);
+            let result =
+                exec_cmd_with_call_async(command, timeout_secs, cwd, registry, call_id_opt).await?;
+            serde_json::to_value(result).map_err(|e| e.to_string())
+        }
+        "exec_powershell" => {
+            let script = arguments
+                .get("script")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Missing required parameter 'script'".to_string())?;
+            let timeout_secs = arguments
+                .get("timeout_secs")
+                .and_then(Value::as_u64)
+                .unwrap_or(30);
+            let cwd = arguments.get("cwd").and_then(Value::as_str);
+            let result =
+                exec_powershell_with_call_async(script, timeout_secs, cwd, registry, call_id_opt)
+                    .await?;
+            serde_json::to_value(result).map_err(|e| e.to_string())
+        }
+        other => Err(format!("Unknown or unsupported tool '{other}'")),
     }
 }

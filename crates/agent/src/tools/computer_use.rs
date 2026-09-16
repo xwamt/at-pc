@@ -22,9 +22,19 @@ fn parse_button(val: Option<&Value>) -> u8 {
 }
 
 /// Resolves coordinate input into appropriate DesktopInputEvent (pixel vs normalized)
-fn resolve_mouse_move_event(arguments: &Value, x_key: &str, y_key: &str) -> Option<DesktopInputEvent> {
-    let x = arguments.get(x_key).and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))).map(|v| v as i32)?;
-    let y = arguments.get(y_key).and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))).map(|v| v as i32)?;
+fn resolve_mouse_move_event(
+    arguments: &Value,
+    x_key: &str,
+    y_key: &str,
+) -> Option<DesktopInputEvent> {
+    let x = arguments
+        .get(x_key)
+        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
+        .map(|v| v as i32)?;
+    let y = arguments
+        .get(y_key)
+        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
+        .map(|v| v as i32)?;
     let mode = arguments
         .get("coord_mode")
         .or_else(|| arguments.get("coordinate_mode"))
@@ -43,7 +53,8 @@ fn resolve_mouse_move_event(arguments: &Value, x_key: &str, y_key: &str) -> Opti
             let (global_x, global_y) = match mode.as_str() {
                 "normalized" | "norm" | "normalized_65535" => {
                     let gx = mon.x + ((x.clamp(0, 65535) as i64 * mon.width as i64) / 65535) as i32;
-                    let gy = mon.y + ((y.clamp(0, 65535) as i64 * mon.height as i64) / 65535) as i32;
+                    let gy =
+                        mon.y + ((y.clamp(0, 65535) as i64 * mon.height as i64) / 65535) as i32;
                     (gx, gy)
                 }
                 "normalized_1000" => {
@@ -65,12 +76,10 @@ fn resolve_mouse_move_event(arguments: &Value, x_key: &str, y_key: &str) -> Opti
     }
 
     match mode.as_str() {
-        "normalized" | "norm" | "normalized_65535" => {
-            Some(DesktopInputEvent::MouseMove {
-                x: x.clamp(0, 65535) as u32,
-                y: y.clamp(0, 65535) as u32,
-            })
-        }
+        "normalized" | "norm" | "normalized_65535" => Some(DesktopInputEvent::MouseMove {
+            x: x.clamp(0, 65535) as u32,
+            y: y.clamp(0, 65535) as u32,
+        }),
         "normalized_1000" => {
             let nx = (x.clamp(0, 1000) as u32 * 65535) / 1000;
             let ny = (y.clamp(0, 1000) as u32 * 65535) / 1000;
@@ -207,7 +216,9 @@ pub fn execute_mouse_drag(arguments: &Value) -> Result<Value, String> {
 
     let end_ev = resolve_mouse_move_event(arguments, "end_x", "end_y")
         .or_else(|| resolve_mouse_move_event(arguments, "to_x", "to_y"))
-        .ok_or_else(|| "Missing required destination coordinates 'end_x' and 'end_y'".to_string())?;
+        .ok_or_else(|| {
+            "Missing required destination coordinates 'end_x' and 'end_y'".to_string()
+        })?;
 
     let (sx, sy) = match &start_ev {
         Some(DesktopInputEvent::MouseMovePixel { x, y }) => (Some(*x), Some(*y)),

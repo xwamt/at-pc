@@ -1,48 +1,20 @@
-use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::config::ServerConfig;
+use crate::ws::registry::TerminalRegistry;
 use at_pc_protocol::messages::{AgentToServerMessage, BinaryDesktopFrame, ServerToAgentMessage};
 use at_pc_protocol::models::{TerminalInfo, TerminalStatus};
-use base64::Engine;
-use crate::config::ServerConfig;
-use crate::ws::codec::compute_accept_key;
-use crate::ws::registry::TerminalRegistry;
 
 /// Trait for handling tool results and agent messages
 pub trait AgentMessageHandler: Send + Sync {
     fn handle_tool_result(&self, msg: AgentToServerMessage);
     fn handle_terminal_disconnected(&self, _terminal_id: &str, _reason: &str) {}
-    #[allow(clippy::too_many_arguments)]
-    fn handle_desktop_frame(
-        &self,
-        _terminal_id: &str,
-        _display_index: u32,
-        _width: u32,
-        _height: u32,
-        _format: &str,
-        _data: &str,
-        _timestamp: u64,
-    ) {}
-    fn handle_desktop_frame_binary(
-        &self,
-        terminal_id: &str,
-        frame: BinaryDesktopFrame,
-    ) {
-        let b64 = base64::prelude::BASE64_STANDARD.encode(&frame.data);
-        self.handle_desktop_frame(
-            terminal_id,
-            frame.display_index,
-            frame.width,
-            frame.height,
-            "jpeg",
-            &b64,
-            frame.timestamp,
-        );
-    }
+    fn handle_desktop_frame_binary(&self, _terminal_id: &str, _frame: BinaryDesktopFrame) {}
 }
 
 /// No-op implementation of AgentMessageHandler
@@ -92,88 +64,6 @@ impl WsServerState {
     }
 }
 
-/// Perform HTTP handshake upgrade to WebSocket on any AsyncRead + AsyncWrite stream (helper)
-pub async fn perform_ws_handshake<S: AsyncRead + AsyncWrite + Unpin>(
-    stream: &mut S,
-    expected_path: &str,
-) -> Result<bool, std::io::Error> {
-    let mut buffer = [0u8; 4096];
-    let mut total_read = 0;
-
-    while total_read < buffer.len() {
-        let n = stream.read(&mut buffer[total_read..]).await?;
-        if n == 0 {
-            return Ok(false);
-        }
-        total_read += n;
-
-        if let Some(pos) = buffer[..total_read].windows(4).position(|w| w == b"\r\n\r\n") {
-            let request_str = String::from_utf8_lossy(&buffer[..pos]);
-            let lines: Vec<&str> = request_str.lines().collect();
-            if lines.is_empty() {
-                return Ok(false);
-            }
-
-            let first_line = lines[0];
-            let mut parts = first_line.split_whitespace();
-            let method = parts.next().unwrap_or("");
-            let path = parts.next().unwrap_or("");
-
-            if method != "GET" {
-                let resp = "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n";
-                stream.write_all(resp.as_bytes()).await?;
-                return Ok(false);
-            }
-
-            if path == "/health" {
-                let resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nOK";
-                stream.write_all(resp.as_bytes()).await?;
-                return Ok(false);
-            }
-
-            if path != expected_path && !expected_path.is_empty() {
-                let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
-                stream.write_all(resp.as_bytes()).await?;
-                return Ok(false);
-            }
-
-            let mut sec_ws_key = None;
-            for line in &lines[1..] {
-                if let Some((k, v)) = line.split_once(':') {
-                    if k.trim().eq_ignore_ascii_case("Sec-WebSocket-Key") {
-                        sec_ws_key = Some(v.trim());
-                        break;
-                    }
-                }
-            }
-
-            let sec_key = match sec_ws_key {
-                Some(k) => k,
-                None => {
-                    let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
-                    stream.write_all(resp.as_bytes()).await?;
-                    return Ok(false);
-                }
-            };
-
-            let accept_key = compute_accept_key(sec_key);
-            let response = format!(
-                "HTTP/1.1 101 Switching Protocols\r\n\
-                Upgrade: websocket\r\n\
-                Connection: Upgrade\r\n\
-                Sec-WebSocket-Accept: {}\r\n\r\n",
-                accept_key
-            );
-
-            stream.write_all(response.as_bytes()).await?;
-            stream.flush().await?;
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
-}
-
 /// Handle a full connected TCP stream upgraded to WebSocket using standard production-grade WebSocket stack
 pub async fn handle_connection(stream: TcpStream, state: WsServerState) {
     handle_stream(stream, state).await;
@@ -186,25 +76,26 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 ) {
     let ws_path = state.config.ws_path.clone();
     #[allow(clippy::result_large_err)]
-    let callback = move |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
-                         resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
-        let path = req.uri().path();
-        if path == "/health" {
-            let res = tokio_tungstenite::tungstenite::http::Response::builder()
-                .status(200)
-                .body(Some("OK".to_string()))
-                .unwrap();
-            return Err(res);
-        }
-        if !ws_path.is_empty() && path != ws_path {
-            let res = tokio_tungstenite::tungstenite::http::Response::builder()
-                .status(404)
-                .body(Some("Not Found".to_string()))
-                .unwrap();
-            return Err(res);
-        }
-        Ok(resp)
-    };
+    let callback =
+        move |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
+              resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
+            let path = req.uri().path();
+            if path == "/health" {
+                let res = tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(200)
+                    .body(Some("OK".to_string()))
+                    .unwrap();
+                return Err(res);
+            }
+            if !ws_path.is_empty() && path != ws_path {
+                let res = tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(404)
+                    .body(Some("Not Found".to_string()))
+                    .unwrap();
+                return Err(res);
+            }
+            Ok(resp)
+        };
 
     let ws_connection = match tokio_tungstenite::accept_hdr_async(stream, callback).await {
         Ok(ws) => ws,
@@ -222,7 +113,9 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             Ok(res) => res,
             Err(err_msg) => {
                 warn!("WebSocket registration handshake failed: {}", err_msg);
-                let _ = ws_sink.send(tokio_tungstenite::tungstenite::Message::Close(None)).await;
+                let _ = ws_sink
+                    .send(tokio_tungstenite::tungstenite::Message::Close(None))
+                    .await;
                 return;
             }
         };
@@ -234,7 +127,8 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     );
 
     // 2. Outgoing message forwarding task (MPSC channel -> WebSocket Sink)
-    let (control_tx, mut control_rx) = mpsc::unbounded_channel::<tokio_tungstenite::tungstenite::Message>();
+    let (control_tx, mut control_rx) =
+        mpsc::unbounded_channel::<tokio_tungstenite::tungstenite::Message>();
     let forwarder_tx = initial_sender_tx.clone();
     let term_id_for_send = terminal_id.clone();
     let forward_task = tokio::spawn(async move {
@@ -295,17 +189,25 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                 else => break,
             }
         }
-        warn!("WebSocket forwarding task for [{}] exited.", term_id_for_send);
+        warn!(
+            "WebSocket forwarding task for [{}] exited.",
+            term_id_for_send
+        );
     });
 
     // 3. Incoming message loop (WebSocket Reader -> Registry & MessageHandler)
-    let idle_timeout = std::time::Duration::from_secs(state.config.offline_threshold_secs.max(15) * 2);
+    let idle_timeout =
+        std::time::Duration::from_secs(state.config.offline_threshold_secs.max(15) * 2);
     loop {
         let msg_res = match tokio::time::timeout(idle_timeout, ws_reader.next()).await {
             Ok(Some(res)) => res,
             Ok(None) => break,
             Err(_) => {
-                warn!("WebSocket read timed out for terminal [{}] (no message for {}s)", terminal_id, idle_timeout.as_secs());
+                warn!(
+                    "WebSocket read timed out for terminal [{}] (no message for {}s)",
+                    terminal_id,
+                    idle_timeout.as_secs()
+                );
                 break;
             }
         };
@@ -333,15 +235,26 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                             }
                         }
                         Err(e) => {
-                            warn!("Failed to decode binary desktop frame from [{}]: {}", terminal_id, e);
+                            warn!(
+                                "Failed to decode binary desktop frame from [{}]: {}",
+                                terminal_id, e
+                            );
                         }
                     }
                 } else {
-                    warn!("Received unexpected binary frame ({} bytes) from terminal [{}]", bin.len(), terminal_id);
+                    warn!(
+                        "Received unexpected binary frame ({} bytes) from terminal [{}]",
+                        bin.len(),
+                        terminal_id
+                    );
                 }
             }
             Ok(tokio_tungstenite::tungstenite::Message::Ping(payload)) => {
-                debug!("Received ping from terminal [{}] ({} bytes); replying with Pong", terminal_id, payload.len());
+                debug!(
+                    "Received ping from terminal [{}] ({} bytes); replying with Pong",
+                    terminal_id,
+                    payload.len()
+                );
                 let _ = control_tx.send(tokio_tungstenite::tungstenite::Message::Pong(payload));
             }
             Ok(tokio_tungstenite::tungstenite::Message::Pong(_)) => {
@@ -361,8 +274,14 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     }
 
     // 4. Cleanup on disconnect
-    info!("Terminal [{}] disconnected. Cleaning up session {}.", terminal_id, session_id);
-    state.registry.set_status_if_current(&terminal_id, session_id, TerminalStatus::Offline).await;
+    info!(
+        "Terminal [{}] disconnected. Cleaning up session {}.",
+        terminal_id, session_id
+    );
+    state
+        .registry
+        .set_status_if_current(&terminal_id, session_id, TerminalStatus::Offline)
+        .await;
     if let Some(ref handler) = state.message_handler {
         handler.handle_terminal_disconnected(&terminal_id, "WebSocket connection closed");
     }
@@ -372,7 +291,10 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 /// Wait for the first message to be a valid Register payload
 async fn wait_for_registration<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     reader: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
-    sink: &mut futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, tokio_tungstenite::tungstenite::Message>,
+    sink: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<S>,
+        tokio_tungstenite::tungstenite::Message,
+    >,
     state: &WsServerState,
 ) -> Result<
     (
@@ -412,7 +334,9 @@ async fn wait_for_registration<S: AsyncRead + AsyncWrite + Unpin + Send + 'stati
                         heartbeat_interval_secs: state.config.heartbeat_interval_secs,
                     };
                     let json = serde_json::to_string(&ack).unwrap();
-                    let _ = sink.send(tokio_tungstenite::tungstenite::Message::Text(json)).await;
+                    let _ = sink
+                        .send(tokio_tungstenite::tungstenite::Message::Text(json))
+                        .await;
                     return Err("Authentication failed".to_string());
                 }
             }
@@ -428,8 +352,7 @@ async fn wait_for_registration<S: AsyncRead + AsyncWrite + Unpin + Send + 'stati
                 heartbeat_interval_secs: state.config.heartbeat_interval_secs,
             };
             let json = serde_json::to_string(&ack).unwrap();
-            sink
-                .send(tokio_tungstenite::tungstenite::Message::Text(json))
+            sink.send(tokio_tungstenite::tungstenite::Message::Text(json))
                 .await
                 .map_err(|e| format!("Failed to send RegisterAck: {}", e))?;
 
@@ -464,13 +387,22 @@ async fn handle_agent_message(
             if let Some(handler) = &state.message_handler {
                 handler.handle_tool_result(msg);
             } else {
-                debug!("Received ToolResult from [{}], but no handler is configured", terminal_id);
+                debug!(
+                    "Received ToolResult from [{}], but no handler is configured",
+                    terminal_id
+                );
             }
         }
-        AgentToServerMessage::Disconnect { terminal_id: did, reason } => {
+        AgentToServerMessage::Disconnect {
+            terminal_id: did,
+            reason,
+        } => {
             let target_id = if did.is_empty() { terminal_id } else { &did };
             info!("Terminal [{}] initiated disconnect: {}", target_id, reason);
-            state.registry.set_status(target_id, TerminalStatus::Offline).await;
+            state
+                .registry
+                .set_status(target_id, TerminalStatus::Offline)
+                .await;
             if let Some(ref handler) = state.message_handler {
                 handler.handle_terminal_disconnected(target_id, &reason);
             }
@@ -478,26 +410,6 @@ async fn handle_agent_message(
         AgentToServerMessage::Register { info, .. } => {
             debug!("Re-registering terminal [{}]", info.terminal_id);
             state.registry.register(info, tx.clone()).await;
-        }
-        AgentToServerMessage::DesktopFrame {
-            display_index,
-            width,
-            height,
-            format,
-            data,
-            timestamp,
-        } => {
-            if let Some(handler) = &state.message_handler {
-                handler.handle_desktop_frame(
-                    terminal_id,
-                    display_index,
-                    width,
-                    height,
-                    &format,
-                    &data,
-                    timestamp,
-                );
-            }
         }
     }
 }

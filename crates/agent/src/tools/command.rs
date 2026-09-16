@@ -4,11 +4,12 @@
 
 use crate::tools::process_registry::{kill_process_tree, ProcessRegistry};
 use serde::{Deserialize, Serialize};
-use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::io::AsyncReadExt;
+use tokio::process::Command as TokioCommand;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -62,13 +63,49 @@ pub fn run_command_with_registry(
 
 /// Runs a command with the given timeout, registering it with both internal ID and optional call_id.
 pub fn run_command_with_registry_and_call(
-    mut cmd: Command,
+    cmd: Command,
     timeout_secs: u64,
     registry: &Arc<ProcessRegistry>,
     call_id: Option<&str>,
 ) -> Result<CommandResult, String> {
     let timeout = if timeout_secs == 0 { 30 } else { timeout_secs };
     let timeout_duration = Duration::from_secs(timeout);
+    let registry = registry.clone();
+    let call_id = call_id.map(str::to_string);
+    block_on_command(async move {
+        run_command_async(cmd, timeout, timeout_duration, registry, call_id.as_deref()).await
+    })
+}
+
+fn block_on_command<T, F>(fut: F) -> T
+where
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            handle.spawn(async move {
+                let _ = tx.send(fut.await);
+            });
+            rx.recv().expect("command task dropped")
+        }
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .expect("failed to build command runtime")
+            .block_on(fut),
+    }
+}
+
+async fn run_command_async(
+    mut cmd: Command,
+    timeout: u64,
+    timeout_duration: Duration,
+    registry: Arc<ProcessRegistry>,
+    call_id: Option<&str>,
+) -> Result<CommandResult, String> {
     let start_time = Instant::now();
 
     cmd.stdin(Stdio::null());
@@ -85,81 +122,81 @@ pub fn run_command_with_registry_and_call(
         apply_no_window(&mut cmd);
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn process: {}", e))?;
+    let mut tokio_cmd = TokioCommand::from(cmd);
+    tokio_cmd.kill_on_drop(true);
 
+    let mut child = tokio_cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn process: {}", e))?;
+
+    let pid = child
+        .id()
+        .ok_or_else(|| "Failed to get process id".to_string())?;
     let proc_id = NEXT_PROC_ID.fetch_add(1, Ordering::SeqCst);
     if let Some(cid) = call_id {
-        registry.register_process_with_call(cid, proc_id, child.id());
+        registry.register_process_with_call(cid, proc_id, pid);
     } else {
-        registry.register_process(proc_id, child.id());
+        registry.register_process(proc_id, pid);
     }
     let _guard = SubprocessGuard {
         id: proc_id,
         registry: registry.clone(),
     };
 
-    let mut stdout_pipe = child.stdout.take();
-    let mut stderr_pipe = child.stderr.take();
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
 
-    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
-    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
-
-    let _stdout_handle = std::thread::spawn(move || {
+    let stdout_task = tokio::spawn(async move {
         let mut buf = Vec::new();
-        if let Some(mut pipe) = stdout_pipe.take() {
-            let _ = pipe.read_to_end(&mut buf);
+        if let Some(mut pipe) = stdout_pipe {
+            let _ = pipe.read_to_end(&mut buf).await;
         }
-        let _ = stdout_tx.send(buf);
+        buf
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = stderr_pipe {
+            let _ = pipe.read_to_end(&mut buf).await;
+        }
+        buf
     });
 
-    let _stderr_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = stderr_pipe.take() {
-            let _ = pipe.read_to_end(&mut buf);
+    match tokio::time::timeout(timeout_duration, child.wait()).await {
+        Ok(Ok(status)) => {
+            let stdout_bytes = tokio::time::timeout(Duration::from_secs(2), stdout_task)
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default();
+            let stderr_bytes = tokio::time::timeout(Duration::from_secs(2), stderr_task)
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default();
+            let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+            let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+            let duration_ms = start_time.elapsed().as_millis() as u64;
+            let exit_code = status.code().unwrap_or(-1);
+
+            Ok(CommandResult {
+                stdout,
+                stderr,
+                exit_code,
+                duration_ms,
+            })
         }
-        let _ = stderr_tx.send(buf);
-    });
-
-    let poll_interval = Duration::from_millis(10);
-    let exit_status;
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                exit_status = Some(status);
-                break;
-            }
-            Ok(None) => {
-                if start_time.elapsed() >= timeout_duration {
-                    kill_process_tree(child.id());
-                    let _ = child.try_wait();
-                    return Err(format!("Command timed out after {} seconds", timeout));
-                }
-                std::thread::sleep(poll_interval);
-            }
-            Err(e) => {
-                kill_process_tree(child.id());
-                let _ = child.try_wait();
-                return Err(format!("Error waiting for process: {}", e));
-            }
+        Ok(Err(e)) => {
+            kill_process_tree(pid);
+            let _ = child.kill().await;
+            Err(format!("Error waiting for process: {}", e))
+        }
+        Err(_) => {
+            kill_process_tree(pid);
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            Err(format!("Command timed out after {} seconds", timeout))
         }
     }
-
-    // Process exited normally. Allow up to 2 seconds for buffers to flush without blocking forever.
-    let stdout_bytes = stdout_rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
-    let stderr_bytes = stderr_rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
-
-    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
-    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
-    let duration_ms = start_time.elapsed().as_millis() as u64;
-    let exit_code = exit_status.and_then(|s| s.code()).unwrap_or(-1);
-
-    Ok(CommandResult {
-        stdout,
-        stderr,
-        exit_code,
-        duration_ms,
-    })
 }
 
 /// Executes a PowerShell script in a hidden background process.
@@ -223,7 +260,32 @@ pub fn exec_powershell_with_call(
     registry: &Arc<ProcessRegistry>,
     call_id: Option<&str>,
 ) -> Result<CommandResult, String> {
+    let script = script.to_string();
+    let cwd = cwd.map(str::to_string);
+    let registry = registry.clone();
+    let call_id = call_id.map(str::to_string);
+    block_on_command(async move {
+        exec_powershell_with_call_async(
+            &script,
+            timeout_secs,
+            cwd.as_deref(),
+            &registry,
+            call_id.as_deref(),
+        )
+        .await
+    })
+}
+
+/// Async PowerShell execution for the production executor path.
+pub async fn exec_powershell_with_call_async(
+    script: &str,
+    timeout_secs: u64,
+    cwd: Option<&str>,
+    registry: &Arc<ProcessRegistry>,
+    call_id: Option<&str>,
+) -> Result<CommandResult, String> {
     check_command_safety(script)?;
+    let (timeout, timeout_duration) = command_timeout(timeout_secs);
     #[cfg(windows)]
     {
         let mut cmd = Command::new("powershell.exe");
@@ -239,7 +301,7 @@ pub fn exec_powershell_with_call(
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        run_command_with_registry_and_call(cmd, timeout_secs, registry, call_id)
+        run_command_async(cmd, timeout, timeout_duration, registry.clone(), call_id).await
     }
 
     #[cfg(not(windows))]
@@ -250,7 +312,15 @@ pub fn exec_powershell_with_call(
             pwsh_cmd.current_dir(dir);
         }
 
-        match run_command_with_registry_and_call(pwsh_cmd, timeout_secs, registry, call_id) {
+        match run_command_async(
+            pwsh_cmd,
+            timeout,
+            timeout_duration,
+            registry.clone(),
+            call_id,
+        )
+        .await
+        {
             Ok(res) => Ok(res),
             Err(e) if e.contains("No such file or directory") || e.contains("not found") => {
                 let mut sh_cmd = Command::new("sh");
@@ -258,7 +328,8 @@ pub fn exec_powershell_with_call(
                 if let Some(dir) = cwd {
                     sh_cmd.current_dir(dir);
                 }
-                run_command_with_registry_and_call(sh_cmd, timeout_secs, registry, call_id)
+                run_command_async(sh_cmd, timeout, timeout_duration, registry.clone(), call_id)
+                    .await
             }
             Err(e) => Err(e),
         }
@@ -292,7 +363,32 @@ pub fn exec_cmd_with_call(
     registry: &Arc<ProcessRegistry>,
     call_id: Option<&str>,
 ) -> Result<CommandResult, String> {
+    let command = command.to_string();
+    let cwd = cwd.map(str::to_string);
+    let registry = registry.clone();
+    let call_id = call_id.map(str::to_string);
+    block_on_command(async move {
+        exec_cmd_with_call_async(
+            &command,
+            timeout_secs,
+            cwd.as_deref(),
+            &registry,
+            call_id.as_deref(),
+        )
+        .await
+    })
+}
+
+/// Async shell command execution for the production executor path.
+pub async fn exec_cmd_with_call_async(
+    command: &str,
+    timeout_secs: u64,
+    cwd: Option<&str>,
+    registry: &Arc<ProcessRegistry>,
+    call_id: Option<&str>,
+) -> Result<CommandResult, String> {
     check_command_safety(command)?;
+    let (timeout, timeout_duration) = command_timeout(timeout_secs);
     #[cfg(windows)]
     {
         let mut cmd = Command::new("cmd.exe");
@@ -301,7 +397,7 @@ pub fn exec_cmd_with_call(
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        run_command_with_registry_and_call(cmd, timeout_secs, registry, call_id)
+        run_command_async(cmd, timeout, timeout_duration, registry.clone(), call_id).await
     }
 
     #[cfg(not(windows))]
@@ -311,8 +407,13 @@ pub fn exec_cmd_with_call(
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        run_command_with_registry_and_call(cmd, timeout_secs, registry, call_id)
+        run_command_async(cmd, timeout, timeout_duration, registry.clone(), call_id).await
     }
+}
+
+fn command_timeout(timeout_secs: u64) -> (u64, Duration) {
+    let timeout = if timeout_secs == 0 { 30 } else { timeout_secs };
+    (timeout, Duration::from_secs(timeout))
 }
 
 #[cfg(test)]

@@ -1,5 +1,9 @@
 target/
+/target-p*/
 dist/
+!crates/server/frontend/dist/
+!crates/server/frontend/dist/**
+node_modules/
 .DS_Store
 *.log
 *.jpg

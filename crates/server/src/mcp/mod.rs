@@ -1,10 +1,6 @@
 pub mod dashboard;
 pub mod tools;
 
-use std::convert::Infallible;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 use axum::{
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
@@ -17,10 +13,13 @@ use axum::{
 };
 use futures_util::stream::Stream;
 use serde_json::{json, Value};
-use tokio::net::TcpListener;
+use std::convert::Infallible;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::config::ServerConfig;
 use crate::router::McpRouter;
@@ -30,6 +29,18 @@ use crate::router::McpRouter;
 pub struct McpHttpState {
     pub router: Arc<McpRouter>,
     pub config: ServerConfig,
+    pub log_file_path: std::path::PathBuf,
+}
+
+/// Returns the server log path used by both the tracing writer and dashboard tail endpoint.
+pub fn default_log_file_path() -> std::path::PathBuf {
+    match std::env::current_dir() {
+        Ok(path) if path != std::path::Path::new("/") => path.join("at-pc-server.log"),
+        _ => std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|dir| dir.join("at-pc-server.log")))
+            .unwrap_or_else(|| std::path::PathBuf::from("at-pc-server.log")),
+    }
 }
 
 /// Create Axum router for the MCP HTTP/SSE gateway
@@ -95,6 +106,7 @@ pub fn create_mcp_http_router(router: Arc<McpRouter>, config: ServerConfig) -> R
     let state = McpHttpState {
         router,
         config: config.clone(),
+        log_file_path: default_log_file_path(),
     };
 
     Router::new()
@@ -153,7 +165,10 @@ pub async fn auth_middleware(
 /// Extracts raw authentication token from Authorization header, Cookie, or Query parameter
 pub fn extract_auth_token(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
     // 1. Check Authorization: Bearer <token> or Authorization: <token>
-    if let Some(auth_header) = headers.get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+    if let Some(auth_header) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
         let clean = auth_header.trim();
         if clean.len() > 7
             && clean[..6].eq_ignore_ascii_case("bearer")
@@ -169,7 +184,10 @@ pub fn extract_auth_token(headers: &HeaderMap, query: Option<&str>) -> Option<St
     }
 
     // 2. Check Cookie: token=<token> or Cookie: auth_token=<token>
-    if let Some(cookie_header) = headers.get(axum::http::header::COOKIE).and_then(|v| v.to_str().ok()) {
+    if let Some(cookie_header) = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+    {
         for pair in cookie_header.split(';') {
             if let Some((k, v)) = pair.trim().split_once('=') {
                 if k.eq_ignore_ascii_case("token") || k.eq_ignore_ascii_case("auth_token") {
@@ -201,7 +219,11 @@ pub fn extract_auth_token(headers: &HeaderMap, query: Option<&str>) -> Option<St
 }
 
 /// Check request authentication using ServerConfig roles and auth_token
-pub fn is_request_authenticated(config: &ServerConfig, headers: &HeaderMap, query: Option<&str>) -> bool {
+pub fn is_request_authenticated(
+    config: &ServerConfig,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> bool {
     if config.auth_token.is_none() && config.roles.is_empty() {
         return true;
     }
@@ -280,7 +302,10 @@ async fn sse_handler(
     req: Request,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, &'static str)> {
     if !is_request_authenticated(&state.config, req.headers(), req.uri().query()) {
-        return Err((StatusCode::UNAUTHORIZED, "Unauthorized: Invalid or missing token"));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized: Invalid or missing token",
+        ));
     }
 
     let (tx, rx) = mpsc::channel::<Event>(32);
@@ -337,8 +362,13 @@ async fn messages_handler(State(state): State<McpHttpState>, req: Request) -> Re
         }
     };
 
-    let token_prefix = token_opt.as_deref().map(crate::audit::AuditLogger::redact_token);
-    let client_ip = req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok())
+    let token_prefix = token_opt
+        .as_deref()
+        .map(crate::audit::AuditLogger::redact_token);
+    let client_ip = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
         .or_else(|| req.headers().get("x-real-ip").and_then(|v| v.to_str().ok()))
         .map(|s| s.to_string());
 
@@ -413,7 +443,9 @@ async fn messages_handler(State(state): State<McpHttpState>, req: Request) -> Re
                 Some(role),
                 client_ip.as_deref(),
                 token_prefix.as_deref(),
-            ).await {
+            )
+            .await
+            {
                 responses.push(resp);
             }
         }
@@ -425,7 +457,9 @@ async fn messages_handler(State(state): State<McpHttpState>, req: Request) -> Re
         Some(role),
         client_ip.as_deref(),
         token_prefix.as_deref(),
-    ).await {
+    )
+    .await
+    {
         (StatusCode::OK, Json(resp)).into_response()
     } else {
         (StatusCode::ACCEPTED, Json(json!({}))).into_response()
@@ -494,17 +528,15 @@ pub async fn handle_jsonrpc_request_with_context(
 
         "ping" => Ok(json!({})),
 
-        "prompts/list" => {
-            Ok(json!({
-                "prompts": [
-                    {
-                        "name": "desktop_automation_strategy",
-                        "description": "Recommended tier hierarchy and operational best practices for at-pc desktop automation and IT operations.",
-                        "arguments": []
-                    }
-                ]
-            }))
-        }
+        "prompts/list" => Ok(json!({
+            "prompts": [
+                {
+                    "name": "desktop_automation_strategy",
+                    "description": "Recommended tier hierarchy and operational best practices for at-pc desktop automation and IT operations.",
+                    "arguments": []
+                }
+            ]
+        })),
 
         "prompts/get" => {
             let prompt_name = params
@@ -605,9 +637,13 @@ When operating on at-pc agent terminals, follow this 3-tier hierarchy:\n\n\
                         if let Some(clean_b64) = b64_raw {
                             // Check if server_save_path argument was provided to save directly on server disk
                             let mut server_saved_note = String::new();
-                            if let Some(ssp) = tool_args.get("server_save_path").and_then(|v| v.as_str()) {
+                            if let Some(ssp) =
+                                tool_args.get("server_save_path").and_then(|v| v.as_str())
+                            {
                                 use base64::Engine;
-                                if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(clean_b64) {
+                                if let Ok(decoded_bytes) =
+                                    base64::engine::general_purpose::STANDARD.decode(clean_b64)
+                                {
                                     let path = std::path::Path::new(ssp.trim());
                                     if let Some(parent) = path.parent() {
                                         if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -616,7 +652,10 @@ When operating on at-pc agent terminals, follow this 3-tier hierarchy:\n\n\
                                     }
                                     match std::fs::write(path, &decoded_bytes) {
                                         Ok(_) => {
-                                            server_saved_note = format!("\nSaved to server host disk: {}", ssp.trim());
+                                            server_saved_note = format!(
+                                                "\nSaved to server host disk: {}",
+                                                ssp.trim()
+                                            );
                                         }
                                         Err(e) => {
                                             server_saved_note = format!("\nWarning: Failed to save to server host disk '{}': {}", ssp.trim(), e);
@@ -657,21 +696,22 @@ When operating on at-pc agent terminals, follow this 3-tier hierarchy:\n\n\
                                 String::new()
                             };
 
-                            let crop_note = if let Some(crop) = val.get("crop").and_then(|v| v.as_array()) {
-                                if crop.len() == 4 {
-                                    format!(
-                                        " (ROI crop: [{}, {}, {}, {}])",
-                                        crop[0].as_u64().unwrap_or(0),
-                                        crop[1].as_u64().unwrap_or(0),
-                                        crop[2].as_u64().unwrap_or(0),
-                                        crop[3].as_u64().unwrap_or(0),
-                                    )
+                            let crop_note =
+                                if let Some(crop) = val.get("crop").and_then(|v| v.as_array()) {
+                                    if crop.len() == 4 {
+                                        format!(
+                                            " (ROI crop: [{}, {}, {}, {}])",
+                                            crop[0].as_u64().unwrap_or(0),
+                                            crop[1].as_u64().unwrap_or(0),
+                                            crop[2].as_u64().unwrap_or(0),
+                                            crop[3].as_u64().unwrap_or(0),
+                                        )
+                                    } else {
+                                        String::new()
+                                    }
                                 } else {
                                     String::new()
-                                }
-                            } else {
-                                String::new()
-                            };
+                                };
 
                             let text_summary = format!(
                                 "Screenshot captured successfully: display {}, resolution {}x{}{}{}, format: {}.{}{}",
@@ -696,7 +736,8 @@ When operating on at-pc agent terminals, follow this 3-tier hierarchy:\n\n\
                             let text = if let Some(s) = val.as_str() {
                                 s.to_string()
                             } else {
-                                serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())
+                                serde_json::to_string_pretty(&val)
+                                    .unwrap_or_else(|_| val.to_string())
                             };
 
                             Ok(json!({
@@ -727,17 +768,15 @@ When operating on at-pc agent terminals, follow this 3-tier hierarchy:\n\n\
                         }))
                     }
                 }
-                Err(err) => {
-                    Ok(json!({
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": format!("Error: {}", err)
-                            }
-                        ],
-                        "isError": true
-                    }))
-                }
+                Err(err) => Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Error: {}", err)
+                        }
+                    ],
+                    "isError": true
+                })),
             }
         }
 
@@ -870,46 +909,5 @@ where
 
     drop(tx);
     let _ = writer_handle.await;
-    Ok(())
-}
-
-/// Start MCP HTTP/SSE server on configured port
-pub async fn start_mcp_http_server(
-    router: Arc<McpRouter>,
-    config: ServerConfig,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let port = config.mcp_port;
-    let host = config.listen_host.clone();
-    let ip: std::net::IpAddr = host
-        .parse()
-        .unwrap_or_else(|_| std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
-    let addr = std::net::SocketAddr::new(ip, port);
-    let app = create_mcp_http_router(router, config.clone());
-
-    if let (Some(cert_path), Some(key_path)) = (&config.tls_cert_path, &config.tls_key_path) {
-        crate::tls::ensure_crypto_provider();
-        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path)
-            .await
-            .map_err(|e| format!("Failed to load TLS config for HTTP server: {}", e))?;
-        info!("MCP HTTPS/SSE gateway listening on https://{}:{} (TLS encrypted)", host, port);
-        axum_server::bind_rustls(addr, rustls_config)
-            .serve(app.into_make_service())
-            .await?;
-    } else {
-        let mut attempts = 0;
-        let listener = loop {
-            match TcpListener::bind(addr).await {
-                Ok(l) => break l,
-                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && attempts < 10 => {
-                    attempts += 1;
-                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                }
-                Err(e) => return Err(e.into()),
-            }
-        };
-        info!("MCP HTTP/SSE gateway listening on http://{}:{}", host, port);
-        axum::serve(listener, app).await?;
-    }
-
     Ok(())
 }

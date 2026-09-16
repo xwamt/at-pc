@@ -26,19 +26,32 @@ async fn test_route_tool_to_target_terminal() {
     // Simulate router forwarding
     let router_clone = router.clone();
     tokio::spawn(async move {
-        if let Some(ServerToAgentMessage::InvokeTool { call_id, tool_name, .. }) = rx.recv().await {
+        if let Some(ServerToAgentMessage::InvokeTool {
+            call_id, tool_name, ..
+        }) = rx.recv().await
+        {
             assert_eq!(tool_name, "exec_powershell");
-            router_clone.handle_tool_result(AgentToServerMessage::ToolResult {
-                call_id,
-                success: true,
-                result: serde_json::json!({ "stdout": "hello", "exit_code": 0 }),
-                error: None,
-                duration_ms: 50,
-            }).await;
+            router_clone
+                .handle_tool_result(AgentToServerMessage::ToolResult {
+                    call_id,
+                    success: true,
+                    result: serde_json::json!({ "stdout": "hello", "exit_code": 0 }),
+                    error: None,
+                    duration_ms: 50,
+                })
+                .await;
         }
     });
 
-    let res = router.invoke_tool("agent-007", "exec_powershell", serde_json::json!({"script": "echo hello"}), 5).await.unwrap();
+    let res = router
+        .invoke_tool(
+            "agent-007",
+            "exec_powershell",
+            serde_json::json!({"script": "echo hello"}),
+            5,
+        )
+        .await
+        .unwrap();
     assert_eq!(res["stdout"], "hello");
 }
 
@@ -77,7 +90,10 @@ async fn test_select_terminal_and_session_memory() {
     assert!(res.is_ok());
     let entry = res.unwrap();
     assert_eq!(entry.info.terminal_id, "pc-2");
-    assert_eq!(router.get_active_terminal_id().await, Some("pc-2".to_string()));
+    assert_eq!(
+        router.get_active_terminal_id().await,
+        Some("pc-2".to_string())
+    );
 
     let active = router.get_active_terminal().await.unwrap();
     assert_eq!(active.info.terminal_id, "pc-2");
@@ -114,31 +130,50 @@ async fn test_session_scoped_active_terminal() {
     registry.register(info2, tx2).await;
 
     // Session A selects agent-1, Session B selects agent-2
-    assert!(router.select_terminal_for_session("session-a", "agent-1").await.is_ok());
-    assert!(router.select_terminal_for_session("session-b", "agent-2").await.is_ok());
+    assert!(router
+        .select_terminal_for_session("session-a", "agent-1")
+        .await
+        .is_ok());
+    assert!(router
+        .select_terminal_for_session("session-b", "agent-2")
+        .await
+        .is_ok());
 
     assert_eq!(
-        router.get_active_terminal_id_for_session(Some("session-a")).await,
+        router
+            .get_active_terminal_id_for_session(Some("session-a"))
+            .await,
         Some("agent-1".to_string())
     );
     assert_eq!(
-        router.get_active_terminal_id_for_session(Some("session-b")).await,
+        router
+            .get_active_terminal_id_for_session(Some("session-b"))
+            .await,
         Some("agent-2".to_string())
     );
 
     // Target resolution respects session
     assert_eq!(
-        router.resolve_target_terminal_with_session(None, Some("session-a")).await.unwrap(),
+        router
+            .resolve_target_terminal_with_session(None, Some("session-a"))
+            .await
+            .unwrap(),
         "agent-1"
     );
     assert_eq!(
-        router.resolve_target_terminal_with_session(None, Some("session-b")).await.unwrap(),
+        router
+            .resolve_target_terminal_with_session(None, Some("session-b"))
+            .await
+            .unwrap(),
         "agent-2"
     );
 
     // Explicit override takes precedence over session
     assert_eq!(
-        router.resolve_target_terminal_with_session(Some("agent-2"), Some("session-a")).await.unwrap(),
+        router
+            .resolve_target_terminal_with_session(Some("agent-2"), Some("session-a"))
+            .await
+            .unwrap(),
         "agent-2"
     );
 }
@@ -160,17 +195,26 @@ async fn test_dispatch_tool_call_meta_tools() {
     registry.register(info, tx).await;
 
     // 1. list_terminals
-    let list_res = router.dispatch_tool_call("list_terminals", json!({})).await.unwrap();
+    let list_res = router
+        .dispatch_tool_call("list_terminals", json!({}))
+        .await
+        .unwrap();
     let arr = list_res.as_array().expect("expected array");
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["info"]["terminal_id"], "pc-test");
 
     // 2. select_terminal
-    let select_res = router.dispatch_tool_call("select_terminal", json!({ "terminal_id": "pc-test" })).await.unwrap();
+    let select_res = router
+        .dispatch_tool_call("select_terminal", json!({ "terminal_id": "pc-test" }))
+        .await
+        .unwrap();
     assert_eq!(select_res["info"]["terminal_id"], "pc-test");
 
     // 3. get_active_terminal
-    let active_res = router.dispatch_tool_call("get_active_terminal", json!({})).await.unwrap();
+    let active_res = router
+        .dispatch_tool_call("get_active_terminal", json!({}))
+        .await
+        .unwrap();
     assert_eq!(active_res["info"]["terminal_id"], "pc-test");
 }
 
@@ -193,26 +237,37 @@ async fn test_dispatch_tool_call_routing_and_fallback() {
     let router_clone = router.clone();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if let ServerToAgentMessage::InvokeTool { call_id, tool_name, .. } = msg {
+            if let ServerToAgentMessage::InvokeTool {
+                call_id, tool_name, ..
+            } = msg
+            {
                 if tool_name == "get_system_overview" {
-                    router_clone.handle_tool_result(AgentToServerMessage::ToolResult {
-                        call_id,
-                        success: true,
-                        result: json!({ "os": "Windows 11", "cpu_cores": 8 }),
-                        error: None,
-                        duration_ms: 10,
-                    }).await;
+                    router_clone
+                        .handle_tool_result(AgentToServerMessage::ToolResult {
+                            call_id,
+                            success: true,
+                            result: json!({ "os": "Windows 11", "cpu_cores": 8 }),
+                            error: None,
+                            duration_ms: 10,
+                        })
+                        .await;
                 }
             }
         }
     });
 
     // Single online node should auto fallback even if no active_terminal_id is selected
-    let res = router.dispatch_tool_call("get_system_overview", json!({})).await.unwrap();
+    let res = router
+        .dispatch_tool_call("get_system_overview", json!({}))
+        .await
+        .unwrap();
     assert_eq!(res["cpu_cores"], 8);
 
     // Explicit terminal_id in arguments
-    let res_explicit = router.dispatch_tool_call("get_system_overview", json!({ "terminal_id": "solo-node" })).await.unwrap();
+    let res_explicit = router
+        .dispatch_tool_call("get_system_overview", json!({ "terminal_id": "solo-node" }))
+        .await
+        .unwrap();
     assert_eq!(res_explicit["cpu_cores"], 8);
 }
 
@@ -239,7 +294,9 @@ async fn test_invoke_tool_timeout() {
         }
     });
 
-    let res = router.invoke_tool("slow-node", "exec_cmd", json!({ "command": "sleep 10" }), 1).await;
+    let res = router
+        .invoke_tool("slow-node", "exec_cmd", json!({ "command": "sleep 10" }), 1)
+        .await;
     assert!(res.is_err());
     let err = res.unwrap_err();
     assert!(err.contains("timed out"));
@@ -264,15 +321,20 @@ async fn test_mcp_jsonrpc_protocol_flow() {
     let router_clone = router.clone();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if let ServerToAgentMessage::InvokeTool { call_id, tool_name, .. } = msg {
+            if let ServerToAgentMessage::InvokeTool {
+                call_id, tool_name, ..
+            } = msg
+            {
                 if tool_name == "exec_powershell" {
-                    router_clone.handle_tool_result(AgentToServerMessage::ToolResult {
-                        call_id,
-                        success: true,
-                        result: json!({ "stdout": "powershell output", "exit_code": 0 }),
-                        error: None,
-                        duration_ms: 15,
-                    }).await;
+                    router_clone
+                        .handle_tool_result(AgentToServerMessage::ToolResult {
+                            call_id,
+                            success: true,
+                            result: json!({ "stdout": "powershell output", "exit_code": 0 }),
+                            error: None,
+                            duration_ms: 15,
+                        })
+                        .await;
                 }
             }
         }
@@ -310,7 +372,9 @@ async fn test_mcp_jsonrpc_protocol_flow() {
             "arguments": {}
         }
     });
-    let call_list_resp = handle_jsonrpc_request(&router, &call_list_req).await.unwrap();
+    let call_list_resp = handle_jsonrpc_request(&router, &call_list_req)
+        .await
+        .unwrap();
     assert_eq!(call_list_resp["result"]["isError"], false);
 
     // 4. tools/call exec_powershell
@@ -328,23 +392,33 @@ async fn test_mcp_jsonrpc_protocol_flow() {
     });
     let call_ps_resp = handle_jsonrpc_request(&router, &call_ps_req).await.unwrap();
     assert_eq!(call_ps_resp["result"]["isError"], false);
-    let text = call_ps_resp["result"]["content"][0]["text"].as_str().unwrap();
+    let text = call_ps_resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
     assert!(text.contains("powershell output"));
 
     // 5. tools/call capture_screen (MCP Image Format Verification)
     let (tx_screen, mut rx_screen) = mpsc::unbounded_channel();
-    registry.register(TerminalInfo {
-        terminal_id: "screen-agent".to_string(),
-        hostname: "HOST-SCREEN".to_string(),
-        username: "user".to_string(),
-        lan_ip: "192.168.1.199".to_string(),
-        os_version: "macOS".to_string(),
-        agent_version: "1.0.0".to_string(),
-    }, tx_screen).await;
+    registry
+        .register(
+            TerminalInfo {
+                terminal_id: "screen-agent".to_string(),
+                hostname: "HOST-SCREEN".to_string(),
+                username: "user".to_string(),
+                lan_ip: "192.168.1.199".to_string(),
+                os_version: "macOS".to_string(),
+                agent_version: "1.0.0".to_string(),
+            },
+            tx_screen,
+        )
+        .await;
 
     let router_for_screen = router.clone();
     tokio::spawn(async move {
-        if let Some(ServerToAgentMessage::InvokeTool { call_id, tool_name, .. }) = rx_screen.recv().await {
+        if let Some(ServerToAgentMessage::InvokeTool {
+            call_id, tool_name, ..
+        }) = rx_screen.recv().await
+        {
             assert_eq!(tool_name, "capture_screen");
             router_for_screen.handle_tool_result(AgentToServerMessage::ToolResult {
                 call_id,
@@ -375,14 +449,19 @@ async fn test_mcp_jsonrpc_protocol_flow() {
             }
         }
     });
-    let call_screen_resp = handle_jsonrpc_request(&router, &call_screen_req).await.unwrap();
+    let call_screen_resp = handle_jsonrpc_request(&router, &call_screen_req)
+        .await
+        .unwrap();
     assert_eq!(call_screen_resp["result"]["isError"], false);
     let contents = call_screen_resp["result"]["content"].as_array().unwrap();
     assert_eq!(contents.len(), 2);
     // Content 0: text summary
     assert_eq!(contents[0]["type"], "text");
     assert!(contents[0]["text"].as_str().unwrap().contains("1920x1080"));
-    assert!(contents[0]["text"].as_str().unwrap().contains("/tmp/test_screen.jpg"));
+    assert!(contents[0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("/tmp/test_screen.jpg"));
     // Content 1: MCP image
     assert_eq!(contents[1]["type"], "image");
     assert_eq!(contents[1]["mimeType"], "image/jpeg");
@@ -416,9 +495,7 @@ async fn test_capture_screen_server_save_path_and_image_base64() {
     let router_for_screen = router.clone();
     tokio::spawn(async move {
         if let Some(ServerToAgentMessage::InvokeTool {
-            call_id,
-            tool_name,
-            ..
+            call_id, tool_name, ..
         }) = rx_screen.recv().await
         {
             assert_eq!(tool_name, "capture_screen");
@@ -459,11 +536,16 @@ async fn test_capture_screen_server_save_path_and_image_base64() {
         }
     });
 
-    let call_screen_resp = handle_jsonrpc_request(&router, &call_screen_req).await.unwrap();
+    let call_screen_resp = handle_jsonrpc_request(&router, &call_screen_req)
+        .await
+        .unwrap();
     assert_eq!(call_screen_resp["result"]["isError"], false);
     let contents = call_screen_resp["result"]["content"].as_array().unwrap();
     assert_eq!(contents.len(), 2);
-    assert!(contents[0]["text"].as_str().unwrap().contains("Saved to server host disk"));
+    assert!(contents[0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Saved to server host disk"));
 
     assert!(temp_save_file.exists());
     let written = std::fs::read(&temp_save_file).unwrap();

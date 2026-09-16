@@ -51,8 +51,8 @@ pub fn read_text_file(
         return Err(format!("Path '{}' is not a file", file_path));
     }
 
-    let mut file = fs::File::open(path)
-        .map_err(|e| format!("Failed to open file '{}': {}", file_path, e))?;
+    let mut file =
+        fs::File::open(path).map_err(|e| format!("Failed to open file '{}': {}", file_path, e))?;
     let file_len = file
         .metadata()
         .map_err(|e| format!("Failed to get metadata for '{}': {}", file_path, e))?
@@ -294,7 +294,11 @@ pub fn write_text_file(
         success: true,
         bytes_written: content.len(),
         backup_path,
-        message: format!("Successfully wrote {} bytes to '{}'", content.len(), file_path),
+        message: format!(
+            "Successfully wrote {} bytes to '{}'",
+            content.len(),
+            file_path
+        ),
     })
 }
 
@@ -305,7 +309,8 @@ mod tests {
 
     #[test]
     fn test_read_text_file_basic_tail() {
-        let temp_dir = std::env::temp_dir().join(format!("at_test_file_ops_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("at_test_file_ops_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let file_path = temp_dir.join("test_tail.txt");
 
@@ -322,7 +327,8 @@ mod tests {
 
     #[test]
     fn test_read_text_file_zero_tail_reads_from_start() {
-        let temp_dir = std::env::temp_dir().join(format!("at_test_file_ops_zero_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("at_test_file_ops_zero_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let file_path = temp_dir.join("test_zero.txt");
 
@@ -338,7 +344,8 @@ mod tests {
 
     #[test]
     fn test_read_text_file_simulated_large_file_backward_seek() {
-        let temp_dir = std::env::temp_dir().join(format!("at_test_file_ops_large_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("at_test_file_ops_large_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let file_path = temp_dir.join("test_large_2gb.log");
 
@@ -372,14 +379,19 @@ mod tests {
         assert!(!res.content.contains("log line 00100"));
 
         // Must complete instantaneously (< 100ms) without reading 2GB into memory
-        assert!(elapsed.as_millis() < 100, "Reading tail took too long: {:?}", elapsed);
+        assert!(
+            elapsed.as_millis() < 100,
+            "Reading tail took too long: {:?}",
+            elapsed
+        );
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
 
     #[test]
     fn test_read_text_file_trailing_empty_lines() {
-        let temp_dir = std::env::temp_dir().join(format!("at_test_file_ops_empty_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("at_test_file_ops_empty_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let file_path = temp_dir.join("test_empty_lines.txt");
 
@@ -397,13 +409,15 @@ mod tests {
 
     #[test]
     fn test_read_text_file_utf8_multibyte_backward_seek() {
-        let temp_dir = std::env::temp_dir().join(format!("at_test_file_ops_utf8_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("at_test_file_ops_utf8_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let file_path = temp_dir.join("test_utf8.log");
 
         // Write 70KB file with multibyte Chinese characters to trigger backward seek (> 64KB)
         let mut file = std::fs::File::create(&file_path).unwrap();
-        let padding = "这是一段用于填充大小的中文测试日志，确保文件超过64KB分块阈值。\n".repeat(1200);
+        let padding =
+            "这是一段用于填充大小的中文测试日志，确保文件超过64KB分块阈值。\n".repeat(1200);
         file.write_all(padding.as_bytes()).unwrap();
 
         let tail_part = "尾部日志行 001：测试终端状态\n尾部日志行 002：逆向流式读取完成\n";
@@ -415,7 +429,11 @@ mod tests {
         let res = read_text_file(file_path.to_str().unwrap(), Some(2), Some(80)).unwrap();
         assert!(res.truncated);
         // Ensure no Unicode replacement character (U+FFFD) is present due to broken character boundary
-        assert!(!res.content.contains('\u{FFFD}'), "Content contains broken UTF-8 replacement char: {}", res.content);
+        assert!(
+            !res.content.contains('\u{FFFD}'),
+            "Content contains broken UTF-8 replacement char: {}",
+            res.content
+        );
         assert!(res.content.contains("逆向流式读取完成"));
 
         let _ = std::fs::remove_dir_all(temp_dir);

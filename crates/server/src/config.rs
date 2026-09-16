@@ -1,3 +1,5 @@
+use at_pc_protocol::tools::agent_tool;
+pub use at_pc_protocol::tools::Role;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,72 +23,21 @@ fn default_audit_log_path() -> Option<PathBuf> {
     Some(PathBuf::from(default_file))
 }
 
-/// Role-based access permission tiers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    Viewer,
-    Operator,
-    Admin,
-}
-
-impl std::fmt::Display for Role {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Role::Viewer => write!(f, "viewer"),
-            Role::Operator => write!(f, "operator"),
-            Role::Admin => write!(f, "admin"),
-        }
-    }
-}
-
-/// Checks whether a given role is authorized to execute the specified tool
+/// Checks whether a role is authorized for a shared Agent tool or explicit Server meta-tool.
+/// Unknown names fail closed for every role.
 pub fn is_tool_allowed_for_role(role: Role, tool_name: &str) -> bool {
-    match role {
-        Role::Admin => true,
-        Role::Operator => !matches!(
-            tool_name,
-            "exec_powershell"
-                | "exec_cmd"
-                | "kill_process"
-                | "write_text_file"
-                | "mouse_click"
-                | "mouse_move"
-                | "mouse_drag"
-                | "mouse_scroll"
-                | "type_text"
-                | "press_key"
-                | "key_down"
-                | "key_up"
-                | "hotkey"
-                | "click_element"
-                | "set_element_text"
-                | "click_mark"
-                | "list_windows"
-                | "focus_window"
-                | "close_window"
-                | "batch_actions"
-        ),
-        Role::Viewer => matches!(
-            tool_name,
-            "list_terminals"
-                | "select_terminal"
-                | "get_active_terminal"
-                | "list_pending_calls"
-                | "get_system_overview"
-                | "list_processes"
-                | "read_text_file"
-                | "capture_screen"
-                | "list_monitors"
-                | "get_marked_screen"
-                | "list_directory"
-                | "search_files"
-                | "list_network_connections"
-                | "test_network"
-                | "get_event_logs"
-                | "get_ui_tree"
-        ),
+    if let Some(spec) = agent_tool(tool_name) {
+        return role >= spec.required_role;
     }
+
+    let required_role = match tool_name {
+        "list_terminals" | "select_terminal" | "get_active_terminal" | "list_pending_calls" => {
+            Role::Viewer
+        }
+        "rename_terminal" | "cancel_tool" | "cancel_task" => Role::Operator,
+        _ => return false,
+    };
+    role >= required_role
 }
 
 /// Configuration for the centralized at-pc server

@@ -2,9 +2,9 @@
 //! Set-of-Mark (SoM) MCP tool schemas, RBAC authorization,
 //! and end-to-end WebSocket tool invocation routing.
 
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-use serde_json::json;
 
 use at_pc_agent::executor::AgentExecutor;
 use at_pc_agent::tools::som::{reset_mark_cache, set_mock_screen_image, store_cached_marks};
@@ -13,7 +13,7 @@ use at_pc_protocol::messages::{AgentToServerMessage, ServerToAgentMessage};
 use at_pc_protocol::models::{MarkedScreenResponse, ScreenMark, TerminalInfo};
 use at_pc_server::config::{is_tool_allowed_for_role, Role, ServerConfig};
 use at_pc_server::mcp::tools::get_mcp_tool_definitions;
-use at_pc_server::router::{get_tool_permission, McpRouter, ToolPermission};
+use at_pc_server::router::McpRouter;
 use at_pc_server::ws::handler::{handle_stream, WsServerState};
 use at_pc_server::ws::registry::TerminalRegistry;
 use image::{Rgba, RgbaImage};
@@ -50,7 +50,10 @@ fn test_mcp_tool_definitions_include_som_tools() {
     }
 
     // Specific schema property checks for get_marked_screen
-    let screen_tool = tools.iter().find(|t| t["name"] == "get_marked_screen").unwrap();
+    let screen_tool = tools
+        .iter()
+        .find(|t| t["name"] == "get_marked_screen")
+        .unwrap();
     let screen_props = &screen_tool["inputSchema"]["properties"];
     assert!(screen_props.get("strategy").is_some());
     assert!(screen_props.get("grid_divisions").is_some());
@@ -69,7 +72,9 @@ fn test_mcp_tool_definitions_include_som_tools() {
 
     // Verify mouse_click schema also includes mark_id
     let mouse_tool = tools.iter().find(|t| t["name"] == "mouse_click").unwrap();
-    assert!(mouse_tool["inputSchema"]["properties"].get("mark_id").is_some());
+    assert!(mouse_tool["inputSchema"]["properties"]
+        .get("mark_id")
+        .is_some());
 }
 
 // =========================================================================
@@ -80,19 +85,7 @@ async fn test_som_tools_rbac_permission_enforcement() {
     let registry = Arc::new(TerminalRegistry::new());
     let router = McpRouter::new(registry.clone());
 
-    // 1. ToolPermission categories
-    assert_eq!(
-        get_tool_permission("get_marked_screen"),
-        ToolPermission::ReadOnly,
-        "get_marked_screen should be ReadOnly diagnostic tool"
-    );
-    assert_eq!(
-        get_tool_permission("click_mark"),
-        ToolPermission::ComputerUse,
-        "click_mark should be ComputerUse mutating tool"
-    );
-
-    // 2. Viewer Role: ALLOWED on get_marked_screen, FORBIDDEN on click_mark
+    // Viewer Role: ALLOWED on get_marked_screen, FORBIDDEN on click_mark
     assert!(
         is_tool_allowed_for_role(Role::Viewer, "get_marked_screen"),
         "Viewer must have access to diagnostic get_marked_screen"
@@ -113,7 +106,9 @@ async fn test_som_tools_rbac_permission_enforcement() {
         )
         .await;
     assert!(viewer_click.is_err());
-    assert!(viewer_click.unwrap_err().contains("Forbidden: Role 'viewer' is not authorized to execute tool 'click_mark'"));
+    assert!(viewer_click
+        .unwrap_err()
+        .contains("Forbidden: Role 'viewer' is not authorized to execute tool 'click_mark'"));
 
     // 3. Operator Role: ALLOWED on get_marked_screen, FORBIDDEN on click_mark
     assert!(
@@ -136,7 +131,9 @@ async fn test_som_tools_rbac_permission_enforcement() {
         )
         .await;
     assert!(operator_click.is_err());
-    assert!(operator_click.unwrap_err().contains("Forbidden: Role 'operator' is not authorized to execute tool 'click_mark'"));
+    assert!(operator_click
+        .unwrap_err()
+        .contains("Forbidden: Role 'operator' is not authorized to execute tool 'click_mark'"));
 
     // 4. Admin Role: ALLOWED on both
     assert!(is_tool_allowed_for_role(Role::Admin, "get_marked_screen"));
@@ -201,7 +198,10 @@ async fn test_router_forwards_and_correlates_som_tool_calls() {
         _ => panic!("Expected InvokeTool variant"),
     }
 
-    let screen_res = invoke_handle.await.unwrap().expect("Dispatch should succeed");
+    let screen_res = invoke_handle
+        .await
+        .unwrap()
+        .expect("Dispatch should succeed");
     assert_eq!(screen_res["total_marks"], 1);
     assert_eq!(screen_res["marks"][0]["id"], 1);
     assert_eq!(screen_res["marks"][0]["label"], "Save Button");
@@ -217,7 +217,10 @@ async fn test_router_forwards_and_correlates_som_tool_calls() {
             .await
     });
 
-    let msg2 = rx.recv().await.expect("Expected InvokeTool message for click_mark");
+    let msg2 = rx
+        .recv()
+        .await
+        .expect("Expected InvokeTool message for click_mark");
     match msg2 {
         ServerToAgentMessage::InvokeTool {
             call_id,
@@ -246,7 +249,10 @@ async fn test_router_forwards_and_correlates_som_tool_calls() {
         _ => panic!("Expected InvokeTool variant"),
     }
 
-    let click_res = click_handle.await.unwrap().expect("Click dispatch should succeed");
+    let click_res = click_handle
+        .await
+        .unwrap()
+        .expect("Click dispatch should succeed");
     assert_eq!(click_res["success"], true);
     assert_eq!(click_res["action"], "click_mark");
     assert_eq!(click_res["mark_id"], 1);

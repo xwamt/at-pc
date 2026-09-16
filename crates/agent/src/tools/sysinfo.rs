@@ -154,10 +154,7 @@ pub fn get_default_gateway() -> String {
     }
 
     // 3. Fallback: route -n or netstat -rn
-    if let Ok(out) = std::process::Command::new("route")
-        .args(["-n"])
-        .output()
-    {
+    if let Ok(out) = std::process::Command::new("route").args(["-n"]).output() {
         if out.status.success() {
             let text = String::from_utf8_lossy(&out.stdout);
             for line in text.lines() {
@@ -232,10 +229,7 @@ pub fn get_dns_servers() -> Vec<String> {
     let mut servers = Vec::new();
 
     // 1. Try scutil --dns
-    if let Ok(out) = std::process::Command::new("scutil")
-        .arg("--dns")
-        .output()
-    {
+    if let Ok(out) = std::process::Command::new("scutil").arg("--dns").output() {
         if out.status.success() {
             let text = String::from_utf8_lossy(&out.stdout);
             for line in text.lines() {
@@ -295,10 +289,7 @@ pub fn get_dns_servers() -> Vec<String> {
 
     // 2. Fallback: resolvectl dns
     if servers.is_empty() {
-        if let Ok(out) = std::process::Command::new("resolvectl")
-            .arg("dns")
-            .output()
-        {
+        if let Ok(out) = std::process::Command::new("resolvectl").arg("dns").output() {
             if out.status.success() {
                 let text = String::from_utf8_lossy(&out.stdout);
                 for line in text.lines() {

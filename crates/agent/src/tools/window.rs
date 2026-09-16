@@ -594,8 +594,8 @@ mod non_windows_impl {
         use core_foundation::string::CFString;
         use core_graphics::geometry::CGRect;
         use core_graphics::window::{
-            copy_window_info, kCGNullWindowID, kCGWindowBounds,
-            kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowOwnerName, kCGWindowOwnerPID,
+            copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowListOptionOnScreenOnly,
+            kCGWindowName, kCGWindowOwnerName, kCGWindowOwnerPID,
         };
 
         let array = copy_window_info(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)?;
@@ -611,9 +611,8 @@ mod non_windows_impl {
         for i in 0..array.len() {
             let Some(item) = array.get(i) else { continue };
             let ptr: *const std::ffi::c_void = *item;
-            let dict: CFDictionary<CFString, CFType> = unsafe {
-                TCFType::wrap_under_get_rule(ptr as CFDictionaryRef)
-            };
+            let dict: CFDictionary<CFString, CFType> =
+                unsafe { TCFType::wrap_under_get_rule(ptr as CFDictionaryRef) };
 
             let title: Option<String> = dict
                 .find(&k_name)

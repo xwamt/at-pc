@@ -73,8 +73,7 @@ fn test_agent_app_state_terminal_info() {
     };
 
     let state = Arc::new(
-        AgentAppState::new("ws://127.0.0.1:9801/ws".to_string())
-            .with_terminal_info(info.clone())
+        AgentAppState::new("ws://127.0.0.1:9801/ws".to_string()).with_terminal_info(info.clone()),
     );
 
     assert_eq!(state.get_terminal_info().terminal_id, "agent-test-1");
@@ -91,8 +90,12 @@ async fn test_agent_app_state_update_server_url() {
 
     // 1. Invalid URLs rejected
     assert!(state.update_server_url("".to_string(), false).is_err());
-    assert!(state.update_server_url("http://127.0.0.1:9801".to_string(), false).is_err());
-    assert!(state.update_server_url("ftp://127.0.0.1".to_string(), false).is_err());
+    assert!(state
+        .update_server_url("http://127.0.0.1:9801".to_string(), false)
+        .is_err());
+    assert!(state
+        .update_server_url("ftp://127.0.0.1".to_string(), false)
+        .is_err());
     assert_eq!(state.server_url(), "ws://127.0.0.1:9801/ws");
 
     // 2. Valid URL accepted
@@ -103,4 +106,42 @@ async fn test_agent_app_state_update_server_url() {
     // 3. Audit log contains update event
     let logs = state.get_audit_logs();
     assert!(logs.iter().any(|l| l.tool_name == "server_url_updated"));
+}
+
+#[test]
+fn test_agent_tool_summary_truncates_at_unicode_scalar_boundaries() {
+    let cases = [
+        ("ascii-80", "a".repeat(78), 80, false),
+        ("ascii-81", "a".repeat(79), 81, true),
+        ("chinese", "中".repeat(81), 83, true),
+        ("precomposed-e-acute", "é".repeat(81), 83, true),
+        ("emoji", "😀".repeat(81), 83, true),
+        ("combining-character", "e\u{301}".repeat(41), 84, true),
+    ];
+
+    for (name, value, serialized_scalar_count, should_truncate) in cases {
+        let arguments = serde_json::Value::String(value);
+        let serialized = serde_json::to_string(&arguments).unwrap();
+        assert_eq!(
+            serialized.chars().count(),
+            serialized_scalar_count,
+            "invalid {name} fixture"
+        );
+
+        let state = AgentAppState::new("ws://127.0.0.1:9801/ws".to_string());
+        state.on_tool_start(name, "test_tool", &arguments);
+        let summary = &state.get_audit_logs()[0].summary;
+
+        let expected_prefix: String = serialized.chars().take(80).collect();
+        let expected = if should_truncate {
+            format!("{expected_prefix}...")
+        } else {
+            serialized
+        };
+        assert_eq!(summary, &expected, "unexpected summary for {name}");
+        assert!(
+            !summary.contains('\u{FFFD}'),
+            "summary for {name} must not contain a replacement character"
+        );
+    }
 }

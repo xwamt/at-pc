@@ -44,25 +44,46 @@ at-pc/
 
 ### 环境要求
 
-- Rust 1.78+ (Edition 2021)
-- 对应平台的 C++ 构建工具链（Windows / macOS / Linux）
+- Rust 1.96.0（由 `rust-toolchain.toml` 精确固定，包含 `rustfmt` 与 `clippy`；当前锁定依赖的最低 Rust 要求为 1.88）
+- 对应平台的原生构建工具链：Windows 使用 MSVC Build Tools / Windows SDK，macOS 使用 Xcode Command Line Tools，Linux 需要 Clang、pkg-config、X11/Wayland、D-Bus 与 PipeWire 开发包
 
 ### 常用命令
 
 ```bash
 # 检查与编译整个工作区
-cargo check --workspace
-cargo build --workspace
+cargo check --workspace --all-features --locked
+cargo build --workspace --all-features --locked
 
-# 执行全部测试用例
-cargo test --workspace
+# 执行工程门禁与全部测试
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
+cargo build --workspace --release --all-features --locked
 
 # 启动 Server 服务端
-cargo run -p at-pc-server
+cargo run --locked -p at-pc-server
 
 # 启动 Agent 客户端
-cargo run -p at-pc-agent
+cargo run --locked -p at-pc-agent
 ```
+
+### 构建产物目录（host vs 交叉编译）
+
+不要把本机 debug/release 和 Windows 交叉产物写进同一个 `target/` 指纹目录。按场景导出 `CARGO_TARGET_DIR`（不要在 `.cargo/config.toml` 里写死 `[build] target-dir`，也不要在那里加 rustflags）：
+
+```bash
+# macOS 日常开发
+CARGO_TARGET_DIR=target/mac cargo test --workspace --locked
+
+# Linux
+CARGO_TARGET_DIR=target/linux cargo test --workspace --locked
+
+# Windows 本机，或交叉编译到 Windows
+CARGO_TARGET_DIR=target/win cargo build-win-gnu --release --locked
+CARGO_TARGET_DIR=target/win cargo build-win-msvc --release --locked
+```
+
+详见 [`docs/build-target-dirs.md`](docs/build-target-dirs.md)。不要在未确认时对遗留的混合 `target/` 执行 `cargo clean`。
 
 ---
 

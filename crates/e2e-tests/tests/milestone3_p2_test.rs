@@ -62,47 +62,90 @@ async fn test_p2_1_computer_use_permission_toggle() {
     assert!(enabled_executor.enable_computer_use);
 
     // 2a. mouse_move
-    let res = enabled_executor.execute("mouse_move", json!({"x": 50, "y": 50})).await;
+    let res = enabled_executor
+        .execute("mouse_move", json!({"x": 50, "y": 50}))
+        .await;
     assert!(res.is_ok(), "mouse_move failed: {:?}", res);
 
     // 2b. mouse_click
-    let res = enabled_executor.execute("mouse_click", json!({"x": 50, "y": 50, "button": "left", "count": 1})).await;
+    let res = enabled_executor
+        .execute(
+            "mouse_click",
+            json!({"x": 50, "y": 50, "button": "left", "count": 1}),
+        )
+        .await;
     assert!(res.is_ok(), "mouse_click failed: {:?}", res);
 
     // 2c. mouse_drag with end_x / end_y and alias to_x / to_y
-    let res = enabled_executor.execute("mouse_drag", json!({"start_x": 10, "start_y": 10, "end_x": 100, "end_y": 100})).await;
+    let res = enabled_executor
+        .execute(
+            "mouse_drag",
+            json!({"start_x": 10, "start_y": 10, "end_x": 100, "end_y": 100}),
+        )
+        .await;
     assert!(res.is_ok(), "mouse_drag with end_x failed: {:?}", res);
-    let res = enabled_executor.execute("mouse_drag", json!({"from_x": 10, "from_y": 10, "to_x": 100, "to_y": 100})).await;
+    let res = enabled_executor
+        .execute(
+            "mouse_drag",
+            json!({"from_x": 10, "from_y": 10, "to_x": 100, "to_y": 100}),
+        )
+        .await;
     assert!(res.is_ok(), "mouse_drag with to_x failed: {:?}", res);
 
     // 2d. mouse_scroll
-    let res = enabled_executor.execute("mouse_scroll", json!({"delta_y": -3})).await;
+    let res = enabled_executor
+        .execute("mouse_scroll", json!({"delta_y": -3}))
+        .await;
     assert!(res.is_ok(), "mouse_scroll failed: {:?}", res);
 
     // 2e. type_text
-    let res = enabled_executor.execute("type_text", json!({"text": "test input"})).await;
+    let res = enabled_executor
+        .execute("type_text", json!({"text": "test input"}))
+        .await;
     assert!(res.is_ok(), "type_text failed: {:?}", res);
 
     // 2f. press_key
-    let res = enabled_executor.execute("press_key", json!({"key": "enter"})).await;
+    let res = enabled_executor
+        .execute("press_key", json!({"key": "enter"}))
+        .await;
     assert!(res.is_ok(), "press_key failed: {:?}", res);
 
     // 2g. key_down & key_up
-    let res = enabled_executor.execute("key_down", json!({"key": "shift"})).await;
+    let res = enabled_executor
+        .execute("key_down", json!({"key": "shift"}))
+        .await;
     assert!(res.is_ok(), "key_down failed: {:?}", res);
-    let res = enabled_executor.execute("key_up", json!({"key": "shift"})).await;
+    let res = enabled_executor
+        .execute("key_up", json!({"key": "shift"}))
+        .await;
     assert!(res.is_ok(), "key_up failed: {:?}", res);
 
     // 2h. hotkey
-    let res = enabled_executor.execute("hotkey", json!({"keys": ["ctrl", "c"]})).await;
+    let res = enabled_executor
+        .execute("hotkey", json!({"keys": ["ctrl", "c"]}))
+        .await;
     assert!(res.is_ok(), "hotkey failed: {:?}", res);
 
     // 3. Enabled executor rejects invalid keys with explicit error
-    let err = enabled_executor.execute("press_key", json!({"key": "nonexistent_fake_key"})).await.unwrap_err();
-    assert!(err.contains("Unknown or unsupported key"), "Expected key error, got: {}", err);
+    let err = enabled_executor
+        .execute("press_key", json!({"key": "nonexistent_fake_key"}))
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("Unknown or unsupported key"),
+        "Expected key error, got: {}",
+        err
+    );
 
-    let err = enabled_executor.execute("hotkey", json!({"keys": ["ctrl", "fake_key_in_hotkey"]})).await.unwrap_err();
-    assert!(err.contains("Unknown or unsupported key"), "Expected hotkey key error, got: {}", err);
+    let err = enabled_executor
+        .execute("hotkey", json!({"keys": ["ctrl", "fake_key_in_hotkey"]}))
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("Unknown or unsupported key"),
+        "Expected hotkey key error, got: {}",
+        err
+    );
 }
 
 #[test]
@@ -141,7 +184,10 @@ async fn test_p2_2_service_and_event_logs_diagnostics() {
 
     // 1. Test manage_service (status of a service)
     let s_res = executor
-        .execute("manage_service", json!({"service_name": "test_service", "action": "status"}))
+        .execute(
+            "manage_service",
+            json!({"service_name": "test_service", "action": "status"}),
+        )
         .await;
     assert!(s_res.is_ok(), "manage_service failed: {:?}", s_res);
     let s_val = s_res.unwrap();
@@ -153,7 +199,10 @@ async fn test_p2_2_service_and_event_logs_diagnostics() {
 
     // 2. Test get_event_logs
     let e_res = executor
-        .execute("get_event_logs", json!({"log_name": "Application", "limit": 5}))
+        .execute(
+            "get_event_logs",
+            json!({"log_name": "Application", "limit": 5}),
+        )
         .await;
     assert!(e_res.is_ok(), "get_event_logs failed: {:?}", e_res);
     let e_val = e_res.unwrap();
@@ -237,7 +286,10 @@ async fn test_p2_3_wss_tls_transport_encryption_e2e() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(registered, "Agent failed to register over WSS/TLS within 5 seconds");
+    assert!(
+        registered,
+        "Agent failed to register over WSS/TLS within 5 seconds"
+    );
 
     // 5. Dispatch a tool invocation over TLS and verify execution
     let tool_res = router
@@ -249,7 +301,11 @@ async fn test_p2_3_wss_tls_transport_encryption_e2e() {
         tool_res
     );
     let val = tool_res.unwrap();
-    assert!(val.get("host_name").is_some() || val.get("os_name").is_some(), "Unexpected get_system_overview payload: {:?}", val);
+    assert!(
+        val.get("host_name").is_some() || val.get("os_name").is_some(),
+        "Unexpected get_system_overview payload: {:?}",
+        val
+    );
 
     // Clean up
     client_task.abort();
@@ -259,7 +315,8 @@ async fn test_p2_3_wss_tls_transport_encryption_e2e() {
 
 #[tokio::test]
 async fn test_p2_3_wss_tls_untrusted_cert_rejected() {
-    let temp_dir = std::env::temp_dir().join(format!("at_pc_tls_untrusted_test_{}", std::process::id()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("at_pc_tls_untrusted_test_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&temp_dir);
 
     // 1. Generate self-signed certificate
@@ -325,7 +382,10 @@ async fn test_p2_3_wss_tls_untrusted_cert_rejected() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(!was_registered, "Agent with insecure_skip_verify=false should NEVER accept self-signed cert");
+    assert!(
+        !was_registered,
+        "Agent with insecure_skip_verify=false should NEVER accept self-signed cert"
+    );
 
     client_task.abort();
     let _ = ws_client.disconnect("Test completed").await;
@@ -370,7 +430,11 @@ async fn test_p2_4_rbac_router_permission_enforcement() {
         .await;
     assert!(res.is_err());
     let err = res.unwrap_err();
-    assert!(err.contains("Forbidden") && err.contains("viewer"), "Got error: {}", err);
+    assert!(
+        err.contains("Forbidden") && err.contains("viewer"),
+        "Got error: {}",
+        err
+    );
 
     // Viewer CANNOT exec_powershell
     let res = router
@@ -443,11 +507,18 @@ async fn test_p2_4_rbac_router_permission_enforcement() {
         .await;
     assert!(res.is_err());
     let err = res.unwrap_err();
-    assert!(!err.contains("Forbidden"), "Admin should pass RBAC, got: {}", err);
+    assert!(
+        !err.contains("Forbidden"),
+        "Admin should pass RBAC, got: {}",
+        err
+    );
 
     // 4. Verify persistent audit log records
     let recent = audit_logger.read_recent(10);
-    assert!(!recent.is_empty(), "Audit log should contain recorded entries");
+    assert!(
+        !recent.is_empty(),
+        "Audit log should contain recorded entries"
+    );
     let denied_records: Vec<_> = recent.iter().filter(|r| r.status == "DENIED").collect();
     assert!(
         !denied_records.is_empty(),
@@ -494,7 +565,13 @@ async fn test_p2_4_dashboard_rbac_and_audit_api() {
         .uri("/api/terminals/t1/desktop/input")
         .header("Authorization", "Bearer viewer-token")
         .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::to_string(&at_pc_protocol::models::DesktopInputEvent::MouseMove { x: 10, y: 10 }).unwrap()))
+        .body(Body::from(
+            serde_json::to_string(&at_pc_protocol::models::DesktopInputEvent::MouseMove {
+                x: 10,
+                y: 10,
+            })
+            .unwrap(),
+        ))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -531,16 +608,25 @@ async fn test_p2_4_dashboard_rbac_and_audit_api() {
 
     // 6. Verify dashboard operations generated audit records
     let logs = audit_logger.read_recent(10);
-    assert!(!logs.is_empty(), "Dashboard operations should generate audit logs");
+    assert!(
+        !logs.is_empty(),
+        "Dashboard operations should generate audit logs"
+    );
     let delete_denied = logs.iter().find(|l| l.action == "api:delete_terminal");
-    assert!(delete_denied.is_some(), "Expected api:delete_terminal audit entry");
+    assert!(
+        delete_denied.is_some(),
+        "Expected api:delete_terminal audit entry"
+    );
     let dd = delete_denied.unwrap();
     assert_eq!(dd.status, "DENIED");
     assert_eq!(dd.role.as_deref(), Some("viewer"));
     assert_eq!(dd.token_prefix.as_deref(), Some("vie***"));
 
     let desktop_denied = logs.iter().find(|l| l.action == "api:desktop_input");
-    assert!(desktop_denied.is_some(), "Expected api:desktop_input audit entry");
+    assert!(
+        desktop_denied.is_some(),
+        "Expected api:desktop_input audit entry"
+    );
 
     let _ = std::fs::remove_file(&temp_audit);
 }

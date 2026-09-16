@@ -2,15 +2,15 @@
 //! Multi-monitor topology discovery (`list_monitors`), MCP schema,
 //! RBAC authorization, and end-to-end router forwarding.
 
-use std::sync::Arc;
 use serde_json::json;
+use std::sync::Arc;
 
 use at_pc_agent::tools::screen::{reset_mock_monitors, set_mock_monitors};
 use at_pc_protocol::messages::{AgentToServerMessage, ServerToAgentMessage};
 use at_pc_protocol::models::{MonitorInfo, TerminalInfo};
 use at_pc_server::config::{is_tool_allowed_for_role, Role};
 use at_pc_server::mcp::tools::get_mcp_tool_definitions;
-use at_pc_server::router::{get_tool_permission, McpRouter, ToolPermission};
+use at_pc_server::router::McpRouter;
 use at_pc_server::ws::registry::TerminalRegistry;
 
 fn create_test_terminal(id: &str, hostname: &str) -> TerminalInfo {
@@ -36,7 +36,9 @@ fn test_mcp_tool_definitions_include_list_monitors() {
         .find(|t| t["name"] == "list_monitors")
         .expect("list_monitors tool should be present in get_mcp_tool_definitions()");
 
-    let desc = tool["description"].as_str().expect("description should be a string");
+    let desc = tool["description"]
+        .as_str()
+        .expect("description should be a string");
     assert!(desc.contains("connected physical and virtual display monitors"));
 
     let schema = &tool["inputSchema"];
@@ -49,12 +51,6 @@ fn test_mcp_tool_definitions_include_list_monitors() {
 // =========================================================================
 #[test]
 fn test_list_monitors_rbac_permission_enforcement() {
-    assert_eq!(
-        get_tool_permission("list_monitors"),
-        ToolPermission::ReadOnly,
-        "list_monitors must be classified as ReadOnly"
-    );
-
     assert!(
         is_tool_allowed_for_role(Role::Viewer, "list_monitors"),
         "Viewer role must have access to list_monitors"
@@ -95,9 +91,7 @@ async fn test_router_forwards_and_correlates_list_monitors_tool_calls() {
     let msg = rx.recv().await.expect("Expected InvokeTool message");
     match msg {
         ServerToAgentMessage::InvokeTool {
-            call_id,
-            tool_name,
-            ..
+            call_id, tool_name, ..
         } => {
             assert_eq!(tool_name, "list_monitors");
 
@@ -137,7 +131,10 @@ async fn test_router_forwards_and_correlates_list_monitors_tool_calls() {
         _ => panic!("Expected InvokeTool variant"),
     }
 
-    let result_val = invoke_handle.await.unwrap().expect("Dispatch should succeed");
+    let result_val = invoke_handle
+        .await
+        .unwrap()
+        .expect("Dispatch should succeed");
     let monitors: Vec<MonitorInfo> =
         serde_json::from_value(result_val).expect("Should deserialize to Vec<MonitorInfo>");
 

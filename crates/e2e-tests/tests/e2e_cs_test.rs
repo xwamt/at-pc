@@ -111,14 +111,19 @@ async fn test_full_cs_registration_and_mcp_routing() {
     assert!(online, "Both agents failed to register as online");
 
     // Initially with 2 online agents and no active selection, dispatching without terminal_id should fail
-    let err_res = router.dispatch_tool_call("exec_cmd", json!({"command": "whoami"})).await;
+    let err_res = router
+        .dispatch_tool_call("exec_cmd", json!({"command": "whoami"}))
+        .await;
     assert!(err_res.is_err());
     assert!(err_res.unwrap_err().contains("Multiple terminals online"));
 
     // Select Agent 1 as active terminal
     let sel_res = router.select_terminal("pc-agent-1").await;
     assert!(sel_res.is_ok());
-    assert_eq!(router.get_active_terminal_id().await, Some("pc-agent-1".to_string()));
+    assert_eq!(
+        router.get_active_terminal_id().await,
+        Some("pc-agent-1".to_string())
+    );
 
     // Dispatch exec_cmd without explicit terminal_id -> routes to Agent 1
     let cmd_res = router
@@ -126,20 +131,34 @@ async fn test_full_cs_registration_and_mcp_routing() {
         .await
         .expect("exec_cmd failed on agent 1");
     let stdout = cmd_res.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
-    assert!(stdout.contains("hello_from_agent1"), "Expected echo output, got: {}", stdout);
+    assert!(
+        stdout.contains("hello_from_agent1"),
+        "Expected echo output, got: {}",
+        stdout
+    );
 
     // Switch session to Agent 2
     let sel_res2 = router.select_terminal("pc-agent-2").await;
     assert!(sel_res2.is_ok());
-    assert_eq!(router.get_active_terminal_id().await, Some("pc-agent-2".to_string()));
+    assert_eq!(
+        router.get_active_terminal_id().await,
+        Some("pc-agent-2".to_string())
+    );
 
     // Dispatch tool to Agent 2
     let cmd_res2 = router
         .dispatch_tool_call("exec_cmd", json!({"command": "echo hello_from_agent2"}))
         .await
         .expect("exec_cmd failed on agent 2");
-    let stdout2 = cmd_res2.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
-    assert!(stdout2.contains("hello_from_agent2"), "Expected echo output, got: {}", stdout2);
+    let stdout2 = cmd_res2
+        .get("stdout")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(
+        stdout2.contains("hello_from_agent2"),
+        "Expected echo output, got: {}",
+        stdout2
+    );
 
     // Clean up
     agent1.disconnect("test completed").await;
@@ -189,7 +208,10 @@ async fn test_explicit_terminal_id_override() {
 
     // Set active session terminal to agent-beta
     router.select_terminal("agent-beta").await.unwrap();
-    assert_eq!(router.get_active_terminal_id().await, Some("agent-beta".to_string()));
+    assert_eq!(
+        router.get_active_terminal_id().await,
+        Some("agent-beta".to_string())
+    );
 
     // Explicit override to agent-alpha via tool arguments
     let res = router
@@ -216,7 +238,10 @@ async fn test_explicit_terminal_id_override() {
         )
         .await
         .expect("Direct invoke_tool failed");
-    let direct_stdout = direct_res.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let direct_stdout = direct_res
+        .get("stdout")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     assert!(
         direct_stdout.contains("direct_invoke"),
         "direct_stdout did not contain direct_invoke: {:?}",
@@ -280,18 +305,19 @@ async fn test_offline_detection_and_agent_disconnect() {
         Some(t) => t.status == TerminalStatus::Offline,
         None => true,
     };
-    assert!(is_offline_or_removed, "Expected disconnected agent to be offline or removed");
+    assert!(
+        is_offline_or_removed,
+        "Expected disconnected agent to be offline or removed"
+    );
 
     // Tool invocation to disconnected agent must fail
     let call_res = router
-        .invoke_tool(
-            "agent-to-disconnect",
-            "get_system_overview",
-            json!({}),
-            5,
-        )
+        .invoke_tool("agent-to-disconnect", "get_system_overview", json!({}), 5)
         .await;
-    assert!(call_res.is_err(), "Tool invocation on offline agent should fail");
+    assert!(
+        call_res.is_err(),
+        "Tool invocation on offline agent should fail"
+    );
 
     // Tool invocation to agent_online continues to succeed
     let online_res = router
@@ -303,7 +329,10 @@ async fn test_offline_detection_and_agent_disconnect() {
         )
         .await
         .expect("Tool call on online agent should succeed");
-    let stdout = online_res.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let stdout = online_res
+        .get("stdout")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     assert!(stdout.contains("still_alive"));
 
     agent_online.disconnect("test completed").await;
@@ -343,7 +372,9 @@ async fn test_mcp_jsonrpc_protocol_flow_e2e() {
         "method": "initialize",
         "params": {}
     });
-    let init_resp = handle_jsonrpc_request(&router, &init_req).await.expect("initialize failed");
+    let init_resp = handle_jsonrpc_request(&router, &init_req)
+        .await
+        .expect("initialize failed");
     assert_eq!(init_resp.get("id").and_then(|v| v.as_i64()), Some(1));
     assert_eq!(
         init_resp["result"]["serverInfo"]["name"].as_str(),
@@ -357,8 +388,12 @@ async fn test_mcp_jsonrpc_protocol_flow_e2e() {
         "method": "tools/list",
         "params": {}
     });
-    let list_resp = handle_jsonrpc_request(&router, &list_req).await.expect("tools/list failed");
-    let tools = list_resp["result"]["tools"].as_array().expect("tools must be array");
+    let list_resp = handle_jsonrpc_request(&router, &list_req)
+        .await
+        .expect("tools/list failed");
+    let tools = list_resp["result"]["tools"]
+        .as_array()
+        .expect("tools must be array");
     let tool_names: Vec<&str> = tools
         .iter()
         .filter_map(|t| t.get("name").and_then(|n| n.as_str()))
@@ -381,8 +416,12 @@ async fn test_mcp_jsonrpc_protocol_flow_e2e() {
             "arguments": {}
         }
     });
-    let call_list_resp = handle_jsonrpc_request(&router, &call_list_req).await.expect("tools/call list_terminals failed");
-    let content_text = call_list_resp["result"]["content"][0]["text"].as_str().unwrap_or("");
+    let call_list_resp = handle_jsonrpc_request(&router, &call_list_req)
+        .await
+        .expect("tools/call list_terminals failed");
+    let content_text = call_list_resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
     assert!(content_text.contains("e2e-mcp-agent"));
 
     // 4. JSON-RPC 'tools/call' -> 'select_terminal'
@@ -397,7 +436,9 @@ async fn test_mcp_jsonrpc_protocol_flow_e2e() {
             }
         }
     });
-    let call_select_resp = handle_jsonrpc_request(&router, &call_select_req).await.expect("tools/call select_terminal failed");
+    let call_select_resp = handle_jsonrpc_request(&router, &call_select_req)
+        .await
+        .expect("tools/call select_terminal failed");
     assert_eq!(call_select_resp["result"]["isError"].as_bool(), Some(false));
 
     // 5. JSON-RPC 'tools/call' -> forwarded 'exec_cmd'
@@ -412,8 +453,12 @@ async fn test_mcp_jsonrpc_protocol_flow_e2e() {
             }
         }
     });
-    let call_exec_resp = handle_jsonrpc_request(&router, &call_exec_req).await.expect("tools/call exec_cmd failed");
-    let exec_out = call_exec_resp["result"]["content"][0]["text"].as_str().unwrap_or("");
+    let call_exec_resp = handle_jsonrpc_request(&router, &call_exec_req)
+        .await
+        .expect("tools/call exec_cmd failed");
+    let exec_out = call_exec_resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
     assert!(exec_out.contains("mcp_rpc_success"));
 
     agent.disconnect("test completed").await;

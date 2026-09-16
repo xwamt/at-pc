@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::json;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tower::ServiceExt;
 
 use at_pc_agent::executor::AgentExecutor;
@@ -233,7 +233,9 @@ async fn test_p1_3_binary_desktop_frame_codec_and_rest_raw_serving() {
     let app = create_mcp_http_router(router.clone(), config);
 
     // Create a mock binary JPEG frame
-    let fake_jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0xFF, 0xD9];
+    let fake_jpeg = vec![
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0xFF, 0xD9,
+    ];
     let frame = BinaryDesktopFrame::new(0, 1920, 1080, 1234567890, fake_jpeg.clone());
 
     let encoded = frame.encode();
@@ -252,12 +254,11 @@ async fn test_p1_3_binary_desktop_frame_codec_and_rest_raw_serving() {
 
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        resp.headers().get("Content-Type").unwrap(),
-        "image/jpeg"
-    );
+    assert_eq!(resp.headers().get("Content-Type").unwrap(), "image/jpeg");
 
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     assert_eq!(body_bytes.as_ref(), fake_jpeg.as_slice());
 
     // 2. Verify legacy JSON frame endpoint GET /api/terminals/:id/desktop/frame also works
@@ -294,7 +295,9 @@ async fn test_p1_5_static_dashboard_asset_decoupling() {
         "text/html; charset=utf-8"
     );
 
-    let html_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let html_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let html_str = String::from_utf8_lossy(&html_bytes);
     assert!(html_str.contains("AT-PC 集中管控平台"));
     assert!(html_str.contains("Obsidian Edition"));
@@ -349,7 +352,9 @@ async fn test_p1_1_rfc6455_ping_pong_frame_bidirectional() {
         auth_token: None,
     };
     client_ws
-        .send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&reg_msg).unwrap()))
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::to_string(&reg_msg).unwrap(),
+        ))
         .await
         .unwrap();
 
@@ -360,7 +365,9 @@ async fn test_p1_1_rfc6455_ping_pong_frame_bidirectional() {
     // Send RFC 6455 Ping frame with payload
     let ping_payload = b"test_ping_payload_12345".to_vec();
     client_ws
-        .send(tokio_tungstenite::tungstenite::Message::Ping(ping_payload.clone()))
+        .send(tokio_tungstenite::tungstenite::Message::Ping(
+            ping_payload.clone(),
+        ))
         .await
         .unwrap();
 
@@ -373,7 +380,11 @@ async fn test_p1_1_rfc6455_ping_pong_frame_bidirectional() {
 
     match pong_resp {
         tokio_tungstenite::tungstenite::Message::Pong(payload) => {
-            assert_eq!(payload.as_slice(), ping_payload.as_slice(), "Pong payload must match Ping payload exactly");
+            assert_eq!(
+                payload.as_slice(),
+                ping_payload.as_slice(),
+                "Pong payload must match Ping payload exactly"
+            );
         }
         other => panic!("Expected Pong message, got {:?}", other),
     }
@@ -419,7 +430,11 @@ async fn test_p1_2_process_tree_cancellation_with_grandchild_process() {
     let elapsed = start.elapsed();
 
     assert!(cancelled, "Cancel should report true");
-    assert!(elapsed < Duration::from_millis(300), "Cancel took {:?}, expected < 300ms", elapsed);
+    assert!(
+        elapsed < Duration::from_millis(300),
+        "Cancel took {:?}, expected < 300ms",
+        elapsed
+    );
 
     let res = task.await.unwrap();
     assert!(res.is_err());
@@ -447,7 +462,12 @@ async fn test_p1_2_list_pending_calls_and_cancellation_flow() {
     let router_clone = router.clone();
     let invoke_handle = tokio::spawn(async move {
         router_clone
-            .invoke_tool("term-list-calls", "exec_cmd", json!({ "command": "sleep 30" }), 30)
+            .invoke_tool(
+                "term-list-calls",
+                "exec_cmd",
+                json!({ "command": "sleep 30" }),
+                30,
+            )
             .await
     });
 
@@ -472,7 +492,9 @@ async fn test_p1_2_list_pending_calls_and_cancellation_flow() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(body_json["success"], true);
     assert_eq!(body_json["calls"].as_array().unwrap().len(), 1);

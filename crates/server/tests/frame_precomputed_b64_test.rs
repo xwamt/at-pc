@@ -10,7 +10,9 @@ async fn test_frame_precomputed_base64_on_ingestion() {
     let registry = Arc::new(TerminalRegistry::new());
     let router = McpRouter::new(registry);
 
-    let test_bytes = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0xFF, 0xD9];
+    let test_bytes = vec![
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0xFF, 0xD9,
+    ];
     let expected_b64 = base64::prelude::BASE64_STANDARD.encode(&test_bytes);
 
     let binary_frame = BinaryDesktopFrame {
@@ -135,8 +137,14 @@ async fn test_frame_keepalive_preserves_precomputed_b64() {
         .await
         .expect("Cached frame must exist");
 
-    assert_eq!(frame.timestamp, 2000, "Timestamp should update on keepalive");
-    assert_eq!(frame.data, expected_b64, "Precomputed base64 must remain intact");
+    assert_eq!(
+        frame.timestamp, 2000,
+        "Timestamp should update on keepalive"
+    );
+    assert_eq!(
+        frame.data, expected_b64,
+        "Precomputed base64 must remain intact"
+    );
     assert_eq!(frame.raw_bytes, test_bytes, "Raw bytes must remain intact");
 }
 
@@ -178,6 +186,9 @@ async fn test_frame_older_timestamp_is_ignored() {
         .expect("Cached frame must exist");
 
     assert_eq!(frame.timestamp, 5000, "Timestamp must not regress");
-    assert_eq!(frame.data, initial_b64, "Precomputed b64 must not be overwritten by older frame");
+    assert_eq!(
+        frame.data, initial_b64,
+        "Precomputed b64 must not be overwritten by older frame"
+    );
     assert_eq!(frame.raw_bytes, initial_bytes);
 }

@@ -160,9 +160,7 @@ pub fn kill_process_tree(pid: u32) {
         let _ = Command::new("kill")
             .args(["-9", &format!("-{}", pid)])
             .output();
-        let _ = Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .output();
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
     }
 
     #[cfg(windows)]

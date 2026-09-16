@@ -8,8 +8,8 @@ use at_pc_protocol::models::DesktopInputEvent;
 pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+        GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN,
     };
 
     unsafe {
@@ -27,8 +27,16 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
                 SetCursorPos(px, py);
 
                 // 2. Dispatch standard SendInput for WM_MOUSEMOVE window message generation
-                let norm_x = if vw > 0 { (((px - vx) as i64 * 65535) / vw as i64).clamp(0, 65535) as i32 } else { px };
-                let norm_y = if vh > 0 { (((py - vy) as i64 * 65535) / vh as i64).clamp(0, 65535) as i32 } else { py };
+                let norm_x = if vw > 0 {
+                    (((px - vx) as i64 * 65535) / vw as i64).clamp(0, 65535) as i32
+                } else {
+                    px
+                };
+                let norm_y = if vh > 0 {
+                    (((py - vy) as i64 * 65535) / vh as i64).clamp(0, 65535) as i32
+                } else {
+                    py
+                };
 
                 let input = INPUT {
                     r#type: INPUT_MOUSE,
@@ -37,7 +45,9 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
                             dx: norm_x,
                             dy: norm_y,
                             mouseData: 0,
-                            dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK,
+                            dwFlags: MOUSEEVENTF_ABSOLUTE
+                                | MOUSEEVENTF_MOVE
+                                | MOUSEEVENTF_VIRTUALDESK,
                             time: 0,
                             dwExtraInfo: 0,
                         },
@@ -46,7 +56,10 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
                 let ret = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
                 if ret == 0 {
                     let err = windows_sys::Win32::Foundation::GetLastError();
-                    tracing::debug!("SendInput MouseMovePixel failed ({}); falling back to mouse_event", err);
+                    tracing::debug!(
+                        "SendInput MouseMovePixel failed ({}); falling back to mouse_event",
+                        err
+                    );
                     mouse_event(
                         MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK,
                         norm_x,
@@ -78,7 +91,9 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
                             dx: norm_x as i32,
                             dy: norm_y as i32,
                             mouseData: 0,
-                            dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK,
+                            dwFlags: MOUSEEVENTF_ABSOLUTE
+                                | MOUSEEVENTF_MOVE
+                                | MOUSEEVENTF_VIRTUALDESK,
                             time: 0,
                             dwExtraInfo: 0,
                         },
@@ -87,7 +102,10 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
                 let ret = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
                 if ret == 0 {
                     let err = windows_sys::Win32::Foundation::GetLastError();
-                    tracing::debug!("SendInput MouseMove failed ({}); falling back to mouse_event", err);
+                    tracing::debug!(
+                        "SendInput MouseMove failed ({}); falling back to mouse_event",
+                        err
+                    );
                     mouse_event(
                         MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK,
                         norm_x as i32,
@@ -98,7 +116,6 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
                 }
             }
             DesktopInputEvent::MouseDown { button } => {
-
                 let flags = match button {
                     0 => MOUSEEVENTF_LEFTDOWN,
                     1 => MOUSEEVENTF_MIDDLEDOWN,
@@ -121,7 +138,10 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
                 let ret = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
                 if ret == 0 {
                     let err = windows_sys::Win32::Foundation::GetLastError();
-                    tracing::debug!("SendInput MouseDown failed ({}); falling back to mouse_event", err);
+                    tracing::debug!(
+                        "SendInput MouseDown failed ({}); falling back to mouse_event",
+                        err
+                    );
                     mouse_event(flags, 0, 0, 0, 0);
                 }
             }
@@ -148,7 +168,10 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
                 let ret = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
                 if ret == 0 {
                     let err = windows_sys::Win32::Foundation::GetLastError();
-                    tracing::debug!("SendInput MouseUp failed ({}); falling back to mouse_event", err);
+                    tracing::debug!(
+                        "SendInput MouseUp failed ({}); falling back to mouse_event",
+                        err
+                    );
                     mouse_event(flags, 0, 0, 0, 0);
                 }
             }
@@ -261,10 +284,10 @@ static DOWN_BUTTON: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::n
 
 #[cfg(target_os = "macos")]
 pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
+    use core_graphics::display::CGDisplay;
     use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use core_graphics::geometry::CGPoint;
-    use core_graphics::display::CGDisplay;
     use std::sync::atomic::Ordering;
 
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
@@ -291,35 +314,50 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
             }
         }
         DesktopInputEvent::MouseMove { x, y } => {
-            let (origin_x, origin_y, total_w, total_h) = if let Ok(displays) = CGDisplay::active_displays() {
-                if !displays.is_empty() {
-                    let mut min_x = f64::MAX;
-                    let mut min_y = f64::MAX;
-                    let mut max_x = f64::MIN;
-                    let mut max_y = f64::MIN;
-                    for d_id in displays {
-                        let b = CGDisplay::new(d_id).bounds();
-                        min_x = min_x.min(b.origin.x);
-                        min_y = min_y.min(b.origin.y);
-                        max_x = max_x.max(b.origin.x + b.size.width);
-                        max_y = max_y.max(b.origin.y + b.size.height);
+            let (origin_x, origin_y, total_w, total_h) =
+                if let Ok(displays) = CGDisplay::active_displays() {
+                    if !displays.is_empty() {
+                        let mut min_x = f64::MAX;
+                        let mut min_y = f64::MAX;
+                        let mut max_x = f64::MIN;
+                        let mut max_y = f64::MIN;
+                        for d_id in displays {
+                            let b = CGDisplay::new(d_id).bounds();
+                            min_x = min_x.min(b.origin.x);
+                            min_y = min_y.min(b.origin.y);
+                            max_x = max_x.max(b.origin.x + b.size.width);
+                            max_y = max_y.max(b.origin.y + b.size.height);
+                        }
+                        (
+                            min_x,
+                            min_y,
+                            (max_x - min_x).max(1.0),
+                            (max_y - min_y).max(1.0),
+                        )
+                    } else {
+                        let bounds = CGDisplay::main().bounds();
+                        (
+                            bounds.origin.x,
+                            bounds.origin.y,
+                            bounds.size.width.max(1.0),
+                            bounds.size.height.max(1.0),
+                        )
                     }
-                    (min_x, min_y, (max_x - min_x).max(1.0), (max_y - min_y).max(1.0))
                 } else {
                     let bounds = CGDisplay::main().bounds();
-                    (bounds.origin.x, bounds.origin.y, bounds.size.width.max(1.0), bounds.size.height.max(1.0))
-                }
-            } else {
-                let bounds = CGDisplay::main().bounds();
-                (bounds.origin.x, bounds.origin.y, bounds.size.width.max(1.0), bounds.size.height.max(1.0))
-            };
+                    (
+                        bounds.origin.x,
+                        bounds.origin.y,
+                        bounds.size.width.max(1.0),
+                        bounds.size.height.max(1.0),
+                    )
+                };
 
             let norm_x = (x.min(65535)) as f64;
             let norm_y = (y.min(65535)) as f64;
             let px = origin_x + (norm_x * total_w) / 65535.0;
             let py = origin_y + (norm_y * total_h) / 65535.0;
             let point = CGPoint::new(px, py);
-
 
             if let Ok(mut lock) = LAST_POINT.lock() {
                 *lock = point;
@@ -392,15 +430,13 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
         }
-        DesktopInputEvent::MouseWheel { delta_y } => {
-            unsafe {
-                let ev = CGEventCreateScrollWheelEvent(std::ptr::null(), 1, 1, delta_y);
-                if !ev.is_null() {
-                    CGEventPost(0, ev);
-                    CFRelease(ev);
-                }
+        DesktopInputEvent::MouseWheel { delta_y } => unsafe {
+            let ev = CGEventCreateScrollWheelEvent(std::ptr::null(), 1, 1, delta_y);
+            if !ev.is_null() {
+                CGEventPost(0, ev);
+                CFRelease(ev);
             }
-        }
+        },
         DesktopInputEvent::KeyDown { key_code, .. } => {
             if let Ok(cg_ev) = CGEvent::new_keyboard_event(source, key_code as u16, true) {
                 cg_ev.post(CGEventTapLocation::HID);
@@ -478,17 +514,17 @@ pub fn try_key_name_to_code(name: &str) -> Option<u32> {
             "f10" => 0x79,
             "f11" => 0x7A,
             "f12" => 0x7B,
-            "." => 0xBE, // VK_OEM_PERIOD
-            "," => 0xBC, // VK_OEM_COMMA
-            "-" | "_" => 0xBD, // VK_OEM_MINUS
-            "=" | "+" => 0xBB, // VK_OEM_PLUS
-            "/" | "?" => 0xBF, // VK_OEM_2
-            ";" | ":" => 0xBA, // VK_OEM_1
+            "." => 0xBE,        // VK_OEM_PERIOD
+            "," => 0xBC,        // VK_OEM_COMMA
+            "-" | "_" => 0xBD,  // VK_OEM_MINUS
+            "=" | "+" => 0xBB,  // VK_OEM_PLUS
+            "/" | "?" => 0xBF,  // VK_OEM_2
+            ";" | ":" => 0xBA,  // VK_OEM_1
             "'" | "\"" => 0xDE, // VK_OEM_7
-            "[" | "{" => 0xDB, // VK_OEM_4
-            "]" | "}" => 0xDD, // VK_OEM_6
+            "[" | "{" => 0xDB,  // VK_OEM_4
+            "]" | "}" => 0xDD,  // VK_OEM_6
             "\\" | "|" => 0xDC, // VK_OEM_5
-            "`" | "~" => 0xC0, // VK_OEM_3
+            "`" | "~" => 0xC0,  // VK_OEM_3
             s if s.len() == 1 => {
                 let ch = s.chars().next().unwrap();
                 if ch.is_ascii_digit() {
@@ -612,4 +648,3 @@ pub fn try_key_name_to_code(name: &str) -> Option<u32> {
 pub fn key_name_to_code(name: &str) -> u32 {
     try_key_name_to_code(name).unwrap_or(0)
 }
-

@@ -1,0 +1,4 @@
+[advisories]
+# eframe 0.27 constrains webbrowser to 0.8.x. Removing this exception requires a
+# separately reviewed GUI framework upgrade to webbrowser >= 1.2.2.
+ignore = ["RUSTSEC-2026-0257"]

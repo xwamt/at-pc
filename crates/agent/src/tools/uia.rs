@@ -5,12 +5,12 @@
 //! (ValuePattern with keyboard typing fallback).
 //! Provides full cross-platform fallback for non-Windows platforms (macOS / Linux).
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, OnceLock};
 use at_pc_protocol::models::{UiElement, UiTreeResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Monotonically increasing element ID generator ensuring session-unique element IDs
 static NEXT_ELEMENT_ID: AtomicU32 = AtomicU32::new(1);
@@ -56,9 +56,15 @@ pub fn find_display_index_for_bounds(bounds: &[i32; 4]) -> Option<usize> {
     }
     let cx = bounds[0] + bounds[2] / 2;
     let cy = bounds[1] + bounds[3] / 2;
-    monitors.iter().find(|mon| {
-        cx >= mon.x && cx < mon.x + mon.width as i32 && cy >= mon.y && cy < mon.y + mon.height as i32
-    }).map(|mon| mon.display_index)
+    monitors
+        .iter()
+        .find(|mon| {
+            cx >= mon.x
+                && cx < mon.x + mon.width as i32
+                && cy >= mon.y
+                && cy < mon.y + mon.height as i32
+        })
+        .map(|mon| mon.display_index)
 }
 
 /// Retrieves a cached element by its ID
@@ -126,9 +132,12 @@ pub fn get_cached_elements_snapshot() -> Vec<CachedElement> {
 }
 
 /// Computes semantic difference between two UI element snapshots (Milestone 3 80ms state_diff)
-pub fn compute_state_diff(before: &[CachedElement], after: &[UiElement]) -> at_pc_protocol::models::UiStateDiff {
-    use std::collections::HashSet;
+pub fn compute_state_diff(
+    before: &[CachedElement],
+    after: &[UiElement],
+) -> at_pc_protocol::models::UiStateDiff {
     use at_pc_protocol::models::{UiElementModification, UiStateDiff};
+    use std::collections::HashSet;
 
     let before_map: HashMap<(String, [i32; 4]), &CachedElement> = before
         .iter()
@@ -149,13 +158,28 @@ pub fn compute_state_diff(before: &[CachedElement], after: &[UiElement]) -> at_p
                 modified.push(UiElementModification {
                     id: el.id,
                     name: el.name.clone(),
-                    old_value: prev.value.clone().or_else(|| if prev.name != el.name { Some(prev.name.clone()) } else { None }),
-                    new_value: el.value.clone().or_else(|| if prev.name != el.name { Some(el.name.clone()) } else { None }),
+                    old_value: prev.value.clone().or_else(|| {
+                        if prev.name != el.name {
+                            Some(prev.name.clone())
+                        } else {
+                            None
+                        }
+                    }),
+                    new_value: el.value.clone().or_else(|| {
+                        if prev.name != el.name {
+                            Some(el.name.clone())
+                        } else {
+                            None
+                        }
+                    }),
                 });
             }
         } else {
             // Check if non-zero rect matches by name and type
-            let name_matched = !el.name.trim().is_empty() && before.iter().any(|b| b.control_type == el.control_type && b.name == el.name);
+            let name_matched = !el.name.trim().is_empty()
+                && before
+                    .iter()
+                    .any(|b| b.control_type == el.control_type && b.name == el.name);
             if !name_matched {
                 added.push(el.clone());
             }
@@ -166,7 +190,9 @@ pub fn compute_state_diff(before: &[CachedElement], after: &[UiElement]) -> at_p
     for prev in before {
         let key = (prev.control_type.clone(), prev.rect);
         if !after_keys.contains(&key) && !prev.name.trim().is_empty() {
-            let still_exists = after.iter().any(|a| a.control_type == prev.control_type && a.name == prev.name);
+            let still_exists = after
+                .iter()
+                .any(|a| a.control_type == prev.control_type && a.name == prev.name);
             if !still_exists {
                 removed.push(UiElement {
                     id: prev.id,
@@ -185,7 +211,13 @@ pub fn compute_state_diff(before: &[CachedElement], after: &[UiElement]) -> at_p
 
     let mut parts = Vec::new();
     if !added.is_empty() {
-        let sample = added.iter().filter(|e| !e.name.is_empty()).map(|e| e.name.as_str()).take(2).collect::<Vec<_>>().join(", ");
+        let sample = added
+            .iter()
+            .filter(|e| !e.name.is_empty())
+            .map(|e| e.name.as_str())
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(", ");
         if sample.is_empty() {
             parts.push(format!("+{} elements", added.len()));
         } else {
@@ -241,11 +273,11 @@ pub fn capture_post_action_diff(before: &[CachedElement]) -> at_pc_protocol::mod
 mod win_uia {
 
     use super::*;
+    use windows::core::{ComInterface, Interface, BSTR};
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
     use windows::Win32::System::Com::*;
     use windows::Win32::UI::Accessibility::*;
     use windows::Win32::UI::WindowsAndMessaging::*;
-    use windows::core::{BSTR, ComInterface, Interface};
 
     pub fn control_type_id_to_name(id: u32) -> &'static str {
         match id {
@@ -316,12 +348,7 @@ mod win_uia {
                 if title.to_lowercase().contains(&state.target_title) {
                     state.found_hwnd = Some(hwnd);
                     state.found_title = title;
-                    state.found_rect = [
-                        r.left,
-                        r.top,
-                        width,
-                        height,
-                    ];
+                    state.found_rect = [r.left, r.top, width, height];
                     return BOOL(0);
                 }
             }
@@ -362,27 +389,35 @@ mod win_uia {
 
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| format!("Failed to create IUIAutomation instance: {}", e))?;
+            let automation: IUIAutomation =
+                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|e| format!("Failed to create IUIAutomation instance: {}", e))?;
 
             let title_filter_trimmed = window_title.map(|s| s.trim()).filter(|s| !s.is_empty());
-            let (target_hwnd, active_window, window_bounds) = if let Some(title_filter) = title_filter_trimmed {
-                let trimmed = title_filter.to_lowercase();
-                let mut state = WindowSearchState {
-                    target_title: trimmed,
-                    found_hwnd: None,
-                    found_title: String::new(),
-                    found_rect: [0, 0, 0, 0],
-                };
-                let _ = EnumWindows(Some(enum_windows_proc), LPARAM(&mut state as *mut _ as isize));
-                if let Some(hwnd) = state.found_hwnd {
-                    (hwnd, state.found_title, state.found_rect)
+            let (target_hwnd, active_window, window_bounds) =
+                if let Some(title_filter) = title_filter_trimmed {
+                    let trimmed = title_filter.to_lowercase();
+                    let mut state = WindowSearchState {
+                        target_title: trimmed,
+                        found_hwnd: None,
+                        found_title: String::new(),
+                        found_rect: [0, 0, 0, 0],
+                    };
+                    let _ = EnumWindows(
+                        Some(enum_windows_proc),
+                        LPARAM(&mut state as *mut _ as isize),
+                    );
+                    if let Some(hwnd) = state.found_hwnd {
+                        (hwnd, state.found_title, state.found_rect)
+                    } else {
+                        return Err(format!(
+                            "No window matching title '{}' was found",
+                            title_filter
+                        ));
+                    }
                 } else {
-                    return Err(format!("No window matching title '{}' was found", title_filter));
-                }
-            } else {
-                get_foreground_window_info()?
-            };
+                    get_foreground_window_info()?
+                };
 
             let root_elem = automation
                 .ElementFromHandle(target_hwnd)
@@ -416,8 +451,18 @@ mod win_uia {
                     .into_iter()
                     .filter(|el| {
                         el.name.to_lowercase().contains(&q_lower)
-                            || el.value.as_deref().unwrap_or("").to_lowercase().contains(&q_lower)
-                            || el.help_text.as_deref().unwrap_or("").to_lowercase().contains(&q_lower)
+                            || el
+                                .value
+                                .as_deref()
+                                .unwrap_or("")
+                                .to_lowercase()
+                                .contains(&q_lower)
+                            || el
+                                .help_text
+                                .as_deref()
+                                .unwrap_or("")
+                                .to_lowercase()
+                                .contains(&q_lower)
                     })
                     .collect();
                 query_matched = Some(matched.len());
@@ -429,7 +474,15 @@ mod win_uia {
                         let ct = el.control_type.as_str();
                         let is_interactive = matches!(
                             ct,
-                            "Button" | "Edit" | "ListItem" | "MenuItem" | "Hyperlink" | "ComboBox" | "CheckBox" | "RadioButton" | "TabItem"
+                            "Button"
+                                | "Edit"
+                                | "ListItem"
+                                | "MenuItem"
+                                | "Hyperlink"
+                                | "ComboBox"
+                                | "CheckBox"
+                                | "RadioButton"
+                                | "TabItem"
                         );
                         is_interactive || !el.name.trim().is_empty() || el.value.is_some()
                     })
@@ -452,7 +505,6 @@ mod win_uia {
             })
         }
     }
-
 
     unsafe fn traverse_node(
         _automation: &IUIAutomation,
@@ -559,8 +611,9 @@ mod win_uia {
     pub fn try_invoke_pattern_at_point(x: i32, y: i32) -> Result<bool, String> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| format!("Failed to create IUIAutomation instance: {}", e))?;
+            let automation: IUIAutomation =
+                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|e| format!("Failed to create IUIAutomation instance: {}", e))?;
 
             let walker = automation
                 .ControlViewWalker()
@@ -620,8 +673,9 @@ mod win_uia {
     pub fn try_value_pattern_at_point(x: i32, y: i32, text: &str) -> Result<bool, String> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| format!("Failed to create IUIAutomation instance: {}", e))?;
+            let automation: IUIAutomation =
+                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|e| format!("Failed to create IUIAutomation instance: {}", e))?;
 
             let walker = automation
                 .ControlViewWalker()
@@ -701,7 +755,8 @@ mod non_windows_fallback {
             let title = if !t.is_empty() {
                 t
             } else {
-                w.app_name().unwrap_or_else(|_| "Unknown Application".to_string())
+                w.app_name()
+                    .unwrap_or_else(|_| "Unknown Application".to_string())
             };
             (
                 title,
@@ -715,15 +770,14 @@ mod non_windows_fallback {
         } else {
             // Fallback to monitor bounds (pick primary or matching monitor)
             let monitors = crate::tools::screen::list_monitors().unwrap_or_default();
-            if let Some(m) = monitors.iter().find(|m| m.is_primary).or_else(|| monitors.first()) {
+            if let Some(m) = monitors
+                .iter()
+                .find(|m| m.is_primary)
+                .or_else(|| monitors.first())
+            {
                 (
                     "Active Desktop".to_string(),
-                    [
-                        m.x,
-                        m.y,
-                        m.width as i32,
-                        m.height as i32,
-                    ],
+                    [m.x, m.y, m.width as i32, m.height as i32],
                 )
             } else {
                 ("Active Desktop".to_string(), [0, 0, 1920, 1080])
@@ -811,8 +865,18 @@ mod non_windows_fallback {
                 .into_iter()
                 .filter(|el| {
                     el.name.to_lowercase().contains(&q_lower)
-                        || el.value.as_deref().unwrap_or("").to_lowercase().contains(&q_lower)
-                        || el.help_text.as_deref().unwrap_or("").to_lowercase().contains(&q_lower)
+                        || el
+                            .value
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(&q_lower)
+                        || el
+                            .help_text
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(&q_lower)
                 })
                 .collect();
             query_matched = Some(matched.len());
@@ -824,7 +888,15 @@ mod non_windows_fallback {
                     let ct = el.control_type.as_str();
                     let is_interactive = matches!(
                         ct,
-                        "Button" | "Edit" | "ListItem" | "MenuItem" | "Hyperlink" | "ComboBox" | "CheckBox" | "RadioButton" | "TabItem"
+                        "Button"
+                            | "Edit"
+                            | "ListItem"
+                            | "MenuItem"
+                            | "Hyperlink"
+                            | "ComboBox"
+                            | "CheckBox"
+                            | "RadioButton"
+                            | "TabItem"
                     );
                     is_interactive || !el.name.trim().is_empty() || el.value.is_some()
                 })
@@ -902,14 +974,18 @@ pub fn click_element_with_diff(
                 let center_x = mark.center[0];
                 let center_y = mark.center[1];
 
-                crate::input::inject_input_event(at_pc_protocol::models::DesktopInputEvent::MouseMovePixel {
-                    x: center_x,
-                    y: center_y,
-                })?;
-                crate::input::inject_input_event(at_pc_protocol::models::DesktopInputEvent::MouseClick {
-                    button: 0,
-                    count: 1,
-                })?;
+                crate::input::inject_input_event(
+                    at_pc_protocol::models::DesktopInputEvent::MouseMovePixel {
+                        x: center_x,
+                        y: center_y,
+                    },
+                )?;
+                crate::input::inject_input_event(
+                    at_pc_protocol::models::DesktopInputEvent::MouseClick {
+                        button: 0,
+                        count: 1,
+                    },
+                )?;
 
                 return Ok(json!({
                     "success": true,
@@ -963,7 +1039,11 @@ pub fn click_element_with_diff(
                     tracing::debug!("Element #{} does not support InvokePattern; falling back to bounding box center click", element_id);
                 }
                 Err(e) => {
-                    tracing::warn!("InvokePattern error for element #{}: {}; falling back to center click", element_id, e);
+                    tracing::warn!(
+                        "InvokePattern error for element #{}: {}; falling back to center click",
+                        element_id,
+                        e
+                    );
                 }
             }
         }
@@ -1050,7 +1130,11 @@ pub fn set_element_text_with_diff(
                 tracing::debug!("Element #{} does not support ValuePattern; falling back to keyboard focus and typing", element_id);
             }
             Err(e) => {
-                tracing::warn!("ValuePattern error for element #{}: {}; falling back to keyboard typing", element_id, e);
+                tracing::warn!(
+                    "ValuePattern error for element #{}: {}; falling back to keyboard typing",
+                    element_id,
+                    e
+                );
             }
         }
     }
@@ -1103,4 +1187,3 @@ pub fn set_element_text_with_diff(
 
     Ok(res)
 }
-

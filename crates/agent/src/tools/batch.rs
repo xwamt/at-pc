@@ -88,7 +88,10 @@ pub fn execute_batch_actions(arguments: &Value) -> Result<Value, String> {
             }
             "set_element_text" | "set_text" => {
                 let eid = step.element_id.ok_or_else(|| {
-                    format!("Step #{}: Missing 'element_id' for set_element_text", idx + 1)
+                    format!(
+                        "Step #{}: Missing 'element_id' for set_element_text",
+                        idx + 1
+                    )
                 })?;
                 let txt = step.text.as_deref().ok_or_else(|| {
                     format!("Step #{}: Missing 'text' for set_element_text", idx + 1)
@@ -102,9 +105,10 @@ pub fn execute_batch_actions(arguments: &Value) -> Result<Value, String> {
                 }));
             }
             "type_text" | "type" => {
-                let txt = step.text.as_deref().ok_or_else(|| {
-                    format!("Step #{}: Missing 'text' for type_text", idx + 1)
-                })?;
+                let txt = step
+                    .text
+                    .as_deref()
+                    .ok_or_else(|| format!("Step #{}: Missing 'text' for type_text", idx + 1))?;
                 crate::tools::computer_use::execute_type_text(&json!({ "text": txt }))?;
                 step_results.push(json!({
                     "step": idx + 1,
@@ -114,9 +118,10 @@ pub fn execute_batch_actions(arguments: &Value) -> Result<Value, String> {
                 }));
             }
             "press_key" | "key" => {
-                let k = step.key.as_deref().ok_or_else(|| {
-                    format!("Step #{}: Missing 'key' for press_key", idx + 1)
-                })?;
+                let k = step
+                    .key
+                    .as_deref()
+                    .ok_or_else(|| format!("Step #{}: Missing 'key' for press_key", idx + 1))?;
                 crate::tools::computer_use::execute_press_key(&json!({ "key": k }))?;
                 step_results.push(json!({
                     "step": idx + 1,
@@ -126,9 +131,10 @@ pub fn execute_batch_actions(arguments: &Value) -> Result<Value, String> {
                 }));
             }
             "hotkey" => {
-                let ks = step.keys.as_ref().ok_or_else(|| {
-                    format!("Step #{}: Missing 'keys' array for hotkey", idx + 1)
-                })?;
+                let ks = step
+                    .keys
+                    .as_ref()
+                    .ok_or_else(|| format!("Step #{}: Missing 'keys' array for hotkey", idx + 1))?;
                 crate::tools::computer_use::execute_hotkey(&json!({ "keys": ks }))?;
                 step_results.push(json!({
                     "step": idx + 1,

@@ -89,8 +89,14 @@ fn test_compute_state_diff_logic() {
     assert_eq!(diff.added_elements[0].name, "Message delivered");
     assert_eq!(diff.modified_elements.len(), 1);
     assert_eq!(diff.modified_elements[0].name, "Input");
-    assert_eq!(diff.modified_elements[0].old_value.as_deref(), Some("Draft"));
-    assert_eq!(diff.modified_elements[0].new_value.as_deref(), Some("Sent!"));
+    assert_eq!(
+        diff.modified_elements[0].old_value.as_deref(),
+        Some("Draft")
+    );
+    assert_eq!(
+        diff.modified_elements[0].new_value.as_deref(),
+        Some("Sent!")
+    );
     assert!(diff.removed_elements.is_empty());
 }
 
@@ -153,9 +159,16 @@ async fn test_click_element_with_diff_response() {
     store_cached_elements(&mock_elements);
 
     let res = executor
-        .execute("click_element", json!({ "element_id": 9902, "with_diff": true }))
+        .execute(
+            "click_element",
+            json!({ "element_id": 9902, "with_diff": true }),
+        )
         .await;
-    assert!(res.is_ok(), "click_element with diff should succeed: {:?}", res.err());
+    assert!(
+        res.is_ok(),
+        "click_element with diff should succeed: {:?}",
+        res.err()
+    );
     let val = res.unwrap();
     assert_eq!(val["success"], true);
     assert!(val["state_diff"].is_object());

@@ -1,4 +1,3 @@
-pub mod codec;
 pub mod handler;
 pub mod registry;
 
@@ -6,13 +5,11 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::info;
 
-pub use codec::{compute_accept_key, WsMessage, WsReader, WsWriter};
+use crate::config::ServerConfig;
 pub use handler::{
-    handle_connection, handle_stream, perform_ws_handshake, AgentMessageHandler,
-    NoopMessageHandler, WsServerState,
+    handle_connection, handle_stream, AgentMessageHandler, NoopMessageHandler, WsServerState,
 };
 pub use registry::{TerminalEntry, TerminalRegistry, TerminalSession, TerminalStatus};
-use crate::config::ServerConfig;
 
 /// Helper function to start the standalone WebSocket server with registry and message handler
 pub async fn start_ws_server<H: AgentMessageHandler + 'static>(

@@ -1,7 +1,9 @@
 //! Agent desktop UI and application state module.
 
+#[cfg(feature = "gui")]
 pub mod ui;
 
+#[cfg(feature = "gui")]
 pub use ui::{run_agent_app, setup_custom_fonts, AgentApp};
 
 use crate::config::AgentConfig;
@@ -153,7 +155,9 @@ impl AgentAppState {
 
             if tokio::runtime::Handle::try_current().is_ok() {
                 tokio::spawn(async move {
-                    client.disconnect("Emergency disconnect triggered by user in Agent UI").await;
+                    client
+                        .disconnect("Emergency disconnect triggered by user in Agent UI")
+                        .await;
                 });
             }
         }
@@ -239,6 +243,18 @@ impl AgentAppState {
     }
 }
 
+const TOOL_ARGUMENT_SUMMARY_MAX_SCALARS: usize = 80;
+
+/// Returns a prefix containing at most `max_scalars` Unicode scalar values.
+///
+/// The boolean is true when the input contained additional scalar values.
+fn truncate_to_scalars(value: &str, max_scalars: usize) -> (&str, bool) {
+    match value.char_indices().nth(max_scalars) {
+        Some((byte_index, _)) => (&value[..byte_index], true),
+        None => (value, false),
+    }
+}
+
 impl AgentEventListener for AgentAppState {
     fn on_status_change(&self, status: ClientConnectionStatus) {
         self.set_status(status);
@@ -246,8 +262,9 @@ impl AgentEventListener for AgentAppState {
 
     fn on_tool_start(&self, call_id: &str, tool_name: &str, arguments: &serde_json::Value) {
         let args_str = serde_json::to_string(arguments).unwrap_or_default();
-        let summary = if args_str.len() > 80 {
-            format!("{}...", &args_str[..80])
+        let (prefix, truncated) = truncate_to_scalars(&args_str, TOOL_ARGUMENT_SUMMARY_MAX_SCALARS);
+        let summary = if truncated {
+            format!("{prefix}...")
         } else {
             args_str
         };

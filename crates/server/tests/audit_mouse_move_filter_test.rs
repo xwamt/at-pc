@@ -85,7 +85,10 @@ async fn test_mouse_move_event_does_not_write_to_audit_logger() {
         assert_eq!(resp.status(), StatusCode::OK);
 
         // Terminal should receive the message without failure
-        let received = rx.recv().await.expect("terminal should receive DesktopInput");
+        let received = rx
+            .recv()
+            .await
+            .expect("terminal should receive DesktopInput");
         match received {
             ServerToAgentMessage::DesktopInput { event: ev } => {
                 assert_eq!(ev, event);

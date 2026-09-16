@@ -4,8 +4,7 @@
 
 use at_pc_agent::executor::AgentExecutor;
 use at_pc_agent::tools::window::{
-    compute_state_diff, reset_window_mocks, set_mock_active_window, set_mock_windows,
-    WindowState,
+    compute_state_diff, reset_window_mocks, set_mock_active_window, set_mock_windows, WindowState,
 };
 use at_pc_protocol::models::{StateDiff, WindowInfo};
 use serde_json::json;
@@ -41,10 +40,16 @@ async fn test_window_tools_permission_toggle() {
     let enabled = AgentExecutor::new().with_computer_use(true);
     assert!(enabled.enable_computer_use);
 
-    let res = enabled.execute("list_windows", json!({"only_visible": true})).await;
+    let res = enabled
+        .execute("list_windows", json!({"only_visible": true}))
+        .await;
     assert!(res.is_ok(), "list_windows failed: {:?}", res);
     let val = res.unwrap();
-    assert!(val.is_array(), "Expected JSON array of windows, got: {:?}", val);
+    assert!(
+        val.is_array(),
+        "Expected JSON array of windows, got: {:?}",
+        val
+    );
 }
 
 #[tokio::test]
@@ -91,7 +96,10 @@ async fn test_list_windows_structure_and_mock_filtering() {
     let executor = AgentExecutor::new().with_computer_use(true);
 
     // 1. only_visible = true (default) filters minimized and empty titles
-    let res = executor.execute("list_windows", json!({"only_visible": true})).await.unwrap();
+    let res = executor
+        .execute("list_windows", json!({"only_visible": true}))
+        .await
+        .unwrap();
     let wins: Vec<WindowInfo> = serde_json::from_value(res).unwrap();
     assert_eq!(wins.len(), 1);
     assert_eq!(wins[0].hwnd, 1001);
@@ -100,7 +108,10 @@ async fn test_list_windows_structure_and_mock_filtering() {
     assert_eq!(wins[0].rect, [50, 50, 1024, 768]);
 
     // 2. only_visible = false returns all 3 windows
-    let res_all = executor.execute("list_windows", json!({"only_visible": false})).await.unwrap();
+    let res_all = executor
+        .execute("list_windows", json!({"only_visible": false}))
+        .await
+        .unwrap();
     let wins_all: Vec<WindowInfo> = serde_json::from_value(res_all).unwrap();
     assert_eq!(wins_all.len(), 3);
 
@@ -139,10 +150,16 @@ async fn test_focus_and_close_window_dispatch() {
     let executor = AgentExecutor::new().with_computer_use(true);
 
     // 1. Error when no parameter provided
-    let err = executor.execute("focus_window", json!({})).await.unwrap_err();
+    let err = executor
+        .execute("focus_window", json!({}))
+        .await
+        .unwrap_err();
     assert!(err.contains("At least one parameter"));
 
-    let err = executor.execute("close_window", json!({})).await.unwrap_err();
+    let err = executor
+        .execute("close_window", json!({}))
+        .await
+        .unwrap_err();
     assert!(err.contains("At least one parameter"));
 
     // 2. Focus by title
@@ -179,7 +196,10 @@ async fn test_focus_and_close_window_dispatch() {
     assert_eq!(close_res["title"], "Calculator");
 
     // Verify window was closed from mock list
-    let remaining_res = executor.execute("list_windows", json!({"only_visible": false})).await.unwrap();
+    let remaining_res = executor
+        .execute("list_windows", json!({"only_visible": false}))
+        .await
+        .unwrap();
     let remaining: Vec<WindowInfo> = serde_json::from_value(remaining_res).unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].title, "Settings");
@@ -293,7 +313,9 @@ async fn test_executor_review_loop_attaches_state_diff() {
         .await
         .unwrap();
     assert_eq!(res_changed["success"], true);
-    let diff = res_changed.get("state_diff").expect("Expected state_diff in mouse_click result");
+    let diff = res_changed
+        .get("state_diff")
+        .expect("Expected state_diff in mouse_click result");
     assert_eq!(diff["foreground_changed"], true);
     assert_eq!(diff["previous_window"], "Same Window");
     assert_eq!(diff["current_window"], "New Window After Click");
@@ -316,7 +338,9 @@ async fn test_executor_review_loop_attaches_state_diff() {
         .await
         .unwrap();
     assert_eq!(res_key["success"], true);
-    let diff_key = res_key.get("state_diff").expect("Expected state_diff on modal dialog");
+    let diff_key = res_key
+        .get("state_diff")
+        .expect("Expected state_diff on modal dialog");
     assert_eq!(diff_key["modal_dialog_detected"], true);
     assert_eq!(diff_key["dialog_title"], "Confirm Exit Dialog");
 

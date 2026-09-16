@@ -95,7 +95,8 @@ impl AgentWsClient {
         terminal_info: TerminalInfo,
         executor: Arc<AgentExecutor>,
     ) -> Self {
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<at_pc_protocol::models::DesktopInputEvent>();
+        let (input_tx, mut input_rx) =
+            mpsc::unbounded_channel::<at_pc_protocol::models::DesktopInputEvent>();
         std::thread::Builder::new()
             .name("desktop-input-worker".to_string())
             .spawn(move || {
@@ -261,7 +262,10 @@ impl AgentWsClient {
 
             let is_tls = is_tls_url(&current_url);
             self.set_status(ClientConnectionStatus::Connecting).await;
-            info!("Connecting to server WebSocket at {}{} (TLS: {})...", host, path, is_tls);
+            info!(
+                "Connecting to server WebSocket at {}{} (TLS: {})...",
+                host, path, is_tls
+            );
 
             let connect_timeout = Duration::from_secs(5);
             let connect_addr = if host.contains(':') {
@@ -286,15 +290,24 @@ impl AgentWsClient {
                                     Ok(connector) => {
                                         match connector.connect(server_name, stream).await {
                                             Ok(tls_stream) => {
-                                                self.handshake_and_run_stream(tls_stream, &host, &path).await
+                                                self.handshake_and_run_stream(
+                                                    tls_stream, &host, &path,
+                                                )
+                                                .await
                                             }
-                                            Err(e) => Err(format!("TLS handshake failed with {}: {}", host_no_port, e)),
+                                            Err(e) => Err(format!(
+                                                "TLS handshake failed with {}: {}",
+                                                host_no_port, e
+                                            )),
                                         }
                                     }
                                     Err(e) => Err(format!("Failed to build TLS connector: {}", e)),
                                 }
                             }
-                            Err(e) => Err(format!("Invalid DNS/IP server name '{}': {}", host_no_port, e)),
+                            Err(e) => Err(format!(
+                                "Invalid DNS/IP server name '{}': {}",
+                                host_no_port, e
+                            )),
                         }
                     } else {
                         self.handshake_and_run_stream(stream, &host, &path).await
@@ -308,7 +321,11 @@ impl AgentWsClient {
                     warn!("Failed to connect to server at {}: {}", connect_addr, e);
                 }
                 Err(_) => {
-                    warn!("Connection to server at {} timed out after {}s", connect_addr, connect_timeout.as_secs());
+                    warn!(
+                        "Connection to server at {} timed out after {}s",
+                        connect_addr,
+                        connect_timeout.as_secs()
+                    );
                 }
             }
 
@@ -351,7 +368,12 @@ impl AgentWsClient {
             tokio_tungstenite::client_async(&url_str, stream),
         )
         .await
-        .map_err(|_| format!("WebSocket handshake timed out after {}s", handshake_timeout.as_secs()))?
+        .map_err(|_| {
+            format!(
+                "WebSocket handshake timed out after {}s",
+                handshake_timeout.as_secs()
+            )
+        })?
         .map_err(|e| format!("WebSocket client handshake failed: {}", e))?;
 
         self.run_with_ws_stream(ws_stream).await
@@ -415,7 +437,8 @@ impl AgentWsClient {
                 heartbeat_interval_secs,
             } => {
                 if !success {
-                    let err = message.unwrap_or_else(|| "Registration rejected by server".to_string());
+                    let err =
+                        message.unwrap_or_else(|| "Registration rejected by server".to_string());
                     return Err(format!("Registration failed: {}", err));
                 }
                 if heartbeat_interval_secs > 0 {
@@ -533,7 +556,8 @@ impl AgentWsClient {
                 Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) => {
                     match serde_json::from_str::<ServerToAgentMessage>(&text) {
                         Ok(server_msg) => {
-                            self.handle_server_message(server_msg, &outbound_tx, &binary_tx).await;
+                            self.handle_server_message(server_msg, &outbound_tx, &binary_tx)
+                                .await;
                         }
                         Err(e) => {
                             warn!("Failed to parse server message: {} (raw: {})", e, text);
@@ -541,7 +565,10 @@ impl AgentWsClient {
                     }
                 }
                 Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(payload)))) => {
-                    debug!("Received WS ping from server ({} bytes); replying with Pong", payload.len());
+                    debug!(
+                        "Received WS ping from server ({} bytes); replying with Pong",
+                        payload.len()
+                    );
                     let _ = pong_tx.send(payload.to_vec());
                 }
                 Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Pong(_)))) => {
@@ -569,7 +596,8 @@ impl AgentWsClient {
                         "WebSocket read timed out (no message received for {}s). Server connection presumed dead.",
                         read_timeout.as_secs()
                     );
-                    session_error = Some("Connection timed out (no heartbeat from server)".to_string());
+                    session_error =
+                        Some("Connection timed out (no heartbeat from server)".to_string());
                     break;
                 }
             }
@@ -620,18 +648,19 @@ impl AgentWsClient {
                     let timeout = if timeout_secs == 0 { 35 } else { timeout_secs };
                     let exec_fut = executor.execute_with_call_id(&cid, &tname, arguments);
 
-                    let (success, result, error) = match tokio::time::timeout(Duration::from_secs(timeout), exec_fut).await {
-                        Ok(Ok(val)) => (true, val, None),
-                        Ok(Err(err)) => (false, serde_json::json!({}), Some(err)),
-                        Err(_) => {
-                            executor.cancel(&cid).await;
-                            (
-                                false,
-                                serde_json::json!({}),
-                                Some(format!("Tool '{}' timed out after {}s", tname, timeout)),
-                            )
-                        }
-                    };
+                    let (success, result, error) =
+                        match tokio::time::timeout(Duration::from_secs(timeout), exec_fut).await {
+                            Ok(Ok(val)) => (true, val, None),
+                            Ok(Err(err)) => (false, serde_json::json!({}), Some(err)),
+                            Err(_) => {
+                                executor.cancel(&cid).await;
+                                (
+                                    false,
+                                    serde_json::json!({}),
+                                    Some(format!("Tool '{}' timed out after {}s", tname, timeout)),
+                                )
+                            }
+                        };
 
                     let duration_ms = start.elapsed().as_millis() as u64;
                     if let Some(ref l) = listener {
@@ -649,11 +678,17 @@ impl AgentWsClient {
                 });
             }
             ServerToAgentMessage::CancelTool { call_id } => {
-                info!("Server requested tool cancellation for call_id: {}", call_id);
+                info!(
+                    "Server requested tool cancellation for call_id: {}",
+                    call_id
+                );
                 self.executor.cancel(&call_id).await;
             }
             ServerToAgentMessage::HeartbeatAck { server_timestamp } => {
-                debug!("Heartbeat acknowledged by server at timestamp: {}", server_timestamp);
+                debug!(
+                    "Heartbeat acknowledged by server at timestamp: {}",
+                    server_timestamp
+                );
             }
             ServerToAgentMessage::RegisterAck { .. } => {
                 debug!("Received subsequent RegisterAck");
@@ -662,14 +697,19 @@ impl AgentWsClient {
                 display_index,
                 fps,
                 quality,
-                ..
+                scale,
             } => {
                 info!(
-                    "Server requested start desktop stream (display: {}, fps: {}, quality: {})",
-                    display_index, fps, quality
+                    "Server requested start desktop stream (display: {}, fps: {}, quality: {}, scale: {})",
+                    display_index, fps, quality, scale
                 );
-                self.stream_controller
-                    .start_binary(display_index, fps, quality, binary_tx.clone());
+                self.stream_controller.start_binary(
+                    display_index,
+                    fps,
+                    quality,
+                    scale,
+                    binary_tx.clone(),
+                );
             }
             ServerToAgentMessage::StopDesktopStream => {
                 info!("Server requested stop desktop stream");

@@ -1,11 +1,11 @@
 //! TLS Configuration and Connector setup for Agent WSS client.
 //! Supports CA verification, mTLS client certificates, and insecure skip verify.
 
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio_rustls::TlsConnector;
 
 /// Ensures the default crypto provider (ring) is installed for rustls
@@ -71,8 +71,8 @@ pub fn build_tls_client_config(
     } else {
         let mut root_store = rustls::RootCertStore::empty();
         if let Some(ca) = ca_cert_path {
-            let ca_file = File::open(ca)
-                .map_err(|e| format!("Failed to open CA cert {:?}: {}", ca, e))?;
+            let ca_file =
+                File::open(ca).map_err(|e| format!("Failed to open CA cert {:?}: {}", ca, e))?;
             let mut ca_reader = BufReader::new(ca_file);
             for cert_res in rustls_pemfile::certs(&mut ca_reader) {
                 let c = cert_res.map_err(|e| format!("Failed to parse CA cert: {}", e))?;
@@ -86,27 +86,28 @@ pub fn build_tls_client_config(
         builder.with_root_certificates(root_store)
     };
 
-    let client_config = if let (Some(cert_path), Some(key_path)) = (client_cert_path, client_key_path) {
-        let cert_file = File::open(cert_path)
-            .map_err(|e| format!("Failed to open client cert file {:?}: {}", cert_path, e))?;
-        let mut cert_reader = BufReader::new(cert_file);
-        let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to parse client certs: {}", e))?;
+    let client_config =
+        if let (Some(cert_path), Some(key_path)) = (client_cert_path, client_key_path) {
+            let cert_file = File::open(cert_path)
+                .map_err(|e| format!("Failed to open client cert file {:?}: {}", cert_path, e))?;
+            let mut cert_reader = BufReader::new(cert_file);
+            let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("Failed to parse client certs: {}", e))?;
 
-        let key_file = File::open(key_path)
-            .map_err(|e| format!("Failed to open client key file {:?}: {}", key_path, e))?;
-        let mut key_reader = BufReader::new(key_file);
-        let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_reader)
-            .map_err(|e| format!("Failed to parse client private key: {}", e))?
-            .ok_or_else(|| format!("No private key found in {:?}", key_path))?;
+            let key_file = File::open(key_path)
+                .map_err(|e| format!("Failed to open client key file {:?}: {}", key_path, e))?;
+            let mut key_reader = BufReader::new(key_file);
+            let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_reader)
+                .map_err(|e| format!("Failed to parse client private key: {}", e))?
+                .ok_or_else(|| format!("No private key found in {:?}", key_path))?;
 
-        config_builder
-            .with_client_auth_cert(certs, key)
-            .map_err(|e| format!("Failed to configure client certificate: {}", e))?
-    } else {
-        config_builder.with_no_client_auth()
-    };
+            config_builder
+                .with_client_auth_cert(certs, key)
+                .map_err(|e| format!("Failed to configure client certificate: {}", e))?
+        } else {
+            config_builder.with_no_client_auth()
+        };
 
     Ok(Arc::new(client_config))
 }
