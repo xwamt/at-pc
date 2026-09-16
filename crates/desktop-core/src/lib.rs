@@ -353,7 +353,12 @@ mod tests {
             decide_frame_send(true, keepalive, keepalive),
             FrameSendDecision::Encode
         );
-        assert!(!should_send_frame(1, 1, Duration::from_millis(250), keepalive));
+        assert!(!should_send_frame(
+            1,
+            1,
+            Duration::from_millis(250),
+            keepalive
+        ));
     }
 
     fn solid_rgba(width: u32, height: u32, pixel: [u8; 4]) -> (Vec<u8>, u32, u32) {

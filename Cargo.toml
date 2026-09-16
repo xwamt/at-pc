@@ -4,16 +4,19 @@ members = [
     "crates/*",
 ]
 
+[workspace.lints.clippy]
+await_holding_lock = "deny"
+
 [workspace.dependencies]
 at-pc-protocol = { path = "crates/protocol" }
+at-pc-build-support = { path = "crates/build-support" }
 tokio = { version = "1.38", features = ["full"] }
 axum = { version = "0.7", features = ["macros"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sysinfo = "0.30"
 local-ip-address = "0.6"
-rand = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow"] }
@@ -24,10 +27,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 chrono = { version = "0.4", features = ["serde"] }
 futures-core = "0.3"
 futures-util = "0.3"
-ring = "0.17"
 toml = "1.1"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
-rust-embed = { version = "8.5", features = ["axum"] }
+rust-embed = "8.5"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.1"

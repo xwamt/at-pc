@@ -9,14 +9,24 @@ use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ExtendedColorType};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use xcap::Monitor;
+
+/// Default maximum dimension for screen capture to cap LLM token usage and network payload
+pub const DEFAULT_MAX_DIMENSION: u32 = 1280;
+
+fn is_empty_arc_str(s: &Arc<str>) -> bool {
+    s.is_empty()
+}
 
 static MOCK_MONITORS: OnceLock<Mutex<Option<Vec<MonitorInfo>>>> = OnceLock::new();
 
 /// Sets an in-memory mock monitor list for testing environments
 pub fn set_mock_monitors(monitors: Option<Vec<MonitorInfo>>) {
-    let mut lock = MOCK_MONITORS.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    let mut lock = MOCK_MONITORS
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap();
     *lock = monitors;
 }
 
@@ -90,7 +100,6 @@ pub fn list_monitors() -> Result<Vec<MonitorInfo>, String> {
     }
 }
 
-
 /// Result of a screen capture operation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScreenCaptureResult {
@@ -98,13 +107,13 @@ pub struct ScreenCaptureResult {
     pub width: u32,
     pub height: u32,
     pub format: String,
-    pub base64_data: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub raw_base64: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub image_base64: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub data_uri: String,
+    pub base64_data: Arc<str>,
+    #[serde(default, skip_serializing_if = "is_empty_arc_str")]
+    pub raw_base64: Arc<str>,
+    #[serde(default, skip_serializing_if = "is_empty_arc_str")]
+    pub image_base64: Arc<str>,
+    #[serde(default, skip_serializing_if = "is_empty_arc_str")]
+    pub data_uri: Arc<str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,39 +143,72 @@ pub fn capture_screen(
     max_dimension: Option<u32>,
     crop: Option<[u32; 4]>,
 ) -> Result<ScreenCaptureResult, String> {
-    let (orig_width, orig_height, dynamic_img) = if let Some(mock_img) = crate::tools::som::get_mock_screen_image() {
-        let mons = list_monitors().unwrap_or_default();
-        if !mons.is_empty() && display_index >= mons.len() {
-            return Err(format!(
-                "Invalid display index {}: system has {} display(s) (indices 0..{})",
-                display_index,
-                mons.len(),
-                mons.len() - 1
-            ));
-        }
-        (mock_img.width(), mock_img.height(), DynamicImage::ImageRgba8(mock_img))
-    } else if let Some(lock) = MOCK_MONITORS.get() {
-        if let Some(ref mock_list) = *lock.lock().unwrap() {
-            if mock_list.is_empty() {
-                return Err("No active displays/monitors found on this system".to_string());
-            }
-            if display_index >= mock_list.len() {
+    let (orig_width, orig_height, dynamic_img) =
+        if let Some(mock_img) = crate::tools::som::get_mock_screen_image() {
+            let mons = list_monitors().unwrap_or_default();
+            if !mons.is_empty() && display_index >= mons.len() {
                 return Err(format!(
                     "Invalid display index {}: system has {} display(s) (indices 0..{})",
                     display_index,
-                    mock_list.len(),
-                    mock_list.len() - 1
+                    mons.len(),
+                    mons.len() - 1
                 ));
             }
-            let mon = &mock_list[display_index];
-            let img = image::RgbaImage::from_pixel(
-                mon.width.max(1),
-                mon.height.max(1),
-                image::Rgba([128, 128, 128, 255]),
-            );
-            (mon.width, mon.height, DynamicImage::ImageRgba8(img))
+            (
+                mock_img.width(),
+                mock_img.height(),
+                DynamicImage::ImageRgba8(mock_img),
+            )
+        } else if let Some(lock) = MOCK_MONITORS.get() {
+            if let Some(ref mock_list) = *lock.lock().unwrap() {
+                if mock_list.is_empty() {
+                    return Err("No active displays/monitors found on this system".to_string());
+                }
+                if display_index >= mock_list.len() {
+                    return Err(format!(
+                        "Invalid display index {}: system has {} display(s) (indices 0..{})",
+                        display_index,
+                        mock_list.len(),
+                        mock_list.len() - 1
+                    ));
+                }
+                let mon = &mock_list[display_index];
+                let img = image::RgbaImage::from_pixel(
+                    mon.width.max(1),
+                    mon.height.max(1),
+                    image::Rgba([128, 128, 128, 255]),
+                );
+                (mon.width, mon.height, DynamicImage::ImageRgba8(img))
+            } else {
+                let monitors =
+                    Monitor::all().map_err(|e| format!("Failed to enumerate monitors: {}", e))?;
+                if monitors.is_empty() {
+                    return Err("No active displays/monitors found on this system".to_string());
+                }
+                if display_index >= monitors.len() {
+                    return Err(format!(
+                        "Invalid display index {}: system has {} display(s) (indices 0..{})",
+                        display_index,
+                        monitors.len(),
+                        monitors.len() - 1
+                    ));
+                }
+                let monitor = &monitors[display_index];
+                let rgba_image = monitor.capture_image().map_err(|e| {
+                    format!(
+                        "Failed to capture screen on display {}: {}",
+                        display_index, e
+                    )
+                })?;
+                (
+                    rgba_image.width(),
+                    rgba_image.height(),
+                    DynamicImage::ImageRgba8(rgba_image),
+                )
+            }
         } else {
-            let monitors = Monitor::all().map_err(|e| format!("Failed to enumerate monitors: {}", e))?;
+            let monitors =
+                Monitor::all().map_err(|e| format!("Failed to enumerate monitors: {}", e))?;
             if monitors.is_empty() {
                 return Err("No active displays/monitors found on this system".to_string());
             }
@@ -179,30 +221,18 @@ pub fn capture_screen(
                 ));
             }
             let monitor = &monitors[display_index];
-            let rgba_image = monitor
-                .capture_image()
-                .map_err(|e| format!("Failed to capture screen on display {}: {}", display_index, e))?;
-            (rgba_image.width(), rgba_image.height(), DynamicImage::ImageRgba8(rgba_image))
-        }
-    } else {
-        let monitors = Monitor::all().map_err(|e| format!("Failed to enumerate monitors: {}", e))?;
-        if monitors.is_empty() {
-            return Err("No active displays/monitors found on this system".to_string());
-        }
-        if display_index >= monitors.len() {
-            return Err(format!(
-                "Invalid display index {}: system has {} display(s) (indices 0..{})",
-                display_index,
-                monitors.len(),
-                monitors.len() - 1
-            ));
-        }
-        let monitor = &monitors[display_index];
-        let rgba_image = monitor
-            .capture_image()
-            .map_err(|e| format!("Failed to capture screen on display {}: {}", display_index, e))?;
-        (rgba_image.width(), rgba_image.height(), DynamicImage::ImageRgba8(rgba_image))
-    };
+            let rgba_image = monitor.capture_image().map_err(|e| {
+                format!(
+                    "Failed to capture screen on display {}: {}",
+                    display_index, e
+                )
+            })?;
+            (
+                rgba_image.width(),
+                rgba_image.height(),
+                DynamicImage::ImageRgba8(rgba_image),
+            )
+        };
 
     let (dynamic_img, effective_crop, scale_factor) =
         process_dynamic_image(dynamic_img, max_dimension, crop);
@@ -256,8 +286,12 @@ pub fn capture_screen(
         }
     }
 
-    let base64_encoded = BASE64_STANDARD.encode(&raw_bytes);
-    let base64_data = format!("data:image/{};base64,{}", effective_format, base64_encoded);
+    let raw_base64_str = BASE64_STANDARD.encode(&raw_bytes);
+    let raw_arc: Arc<str> = Arc::from(raw_base64_str);
+    let data_uri_arc: Arc<str> = Arc::from(format!(
+        "data:image/{};base64,{}",
+        effective_format, raw_arc
+    ));
 
     let has_resized = final_width != orig_width || final_height != orig_height;
 
@@ -266,10 +300,10 @@ pub fn capture_screen(
         width: final_width,
         height: final_height,
         format: effective_format.to_string(),
-        base64_data: base64_data.clone(),
-        raw_base64: base64_encoded.clone(),
-        image_base64: base64_encoded,
-        data_uri: base64_data,
+        base64_data: Arc::clone(&data_uri_arc),
+        raw_base64: Arc::clone(&raw_arc),
+        image_base64: Arc::clone(&raw_arc),
+        data_uri: data_uri_arc,
         file_path: saved_file_path,
         original_width: if has_resized { Some(orig_width) } else { None },
         original_height: if has_resized { Some(orig_height) } else { None },
@@ -280,6 +314,9 @@ pub fn capture_screen(
 
 /// Helper function to process an in-memory DynamicImage by applying ROI cropping and resolution downsampling.
 /// This allows pure in-memory testing without needing physical displays or OS screen recording permissions.
+///
+/// Default `max_dimension` is set to `DEFAULT_MAX_DIMENSION` (1280) when `None` is provided,
+/// reducing payload volume and token costs for LLMs. Pass `Some(0)` to explicitly disable downsampling.
 pub fn process_dynamic_image(
     mut dynamic_img: DynamicImage,
     max_dimension: Option<u32>,
@@ -302,12 +339,19 @@ pub fn process_dynamic_image(
         None
     };
 
-    // 2. Apply resolution downsampling if max_dimension is specified
+    // 2. Apply resolution downsampling: defaults to 1280 if not specified (None).
+    // Some(0) explicitly disables downsampling (uncapped).
+    let effective_max_dim = match max_dimension {
+        None => Some(DEFAULT_MAX_DIMENSION),
+        Some(0) => None,
+        Some(dim) => Some(dim),
+    };
+
     let pre_scale_w = dynamic_img.width();
     let pre_scale_h = dynamic_img.height();
     let mut scale_factor = None;
 
-    if let Some(max_dim) = max_dimension {
+    if let Some(max_dim) = effective_max_dim {
         if max_dim > 0 && (pre_scale_w > max_dim || pre_scale_h > max_dim) {
             let (new_w, new_h) = if pre_scale_w >= pre_scale_h {
                 let nw = max_dim;
@@ -317,14 +361,23 @@ pub fn process_dynamic_image(
                 (nw, nh)
             } else {
                 let nh = max_dim;
-                let nw = ((pre_scale_w as f64 * max_dim as f64) / pre_scale_h as f64)
+                let nw = ((pre_scale_w as f64 * max_dim as f64) / pre_scale_w as f64)
                     .round()
                     .max(1.0) as u32;
                 (nw, nh)
             };
             let factor = new_w as f32 / pre_scale_w as f32;
             scale_factor = Some(factor);
-            dynamic_img = dynamic_img.resize(new_w, new_h, image::imageops::FilterType::Triangle);
+            // Optimize resizing: convert to RGB8 before resizing to eliminate
+            // redundant alpha channel processing in Triangle interpolation
+            let rgb_img = dynamic_img.to_rgb8();
+            let resized = image::imageops::resize(
+                &rgb_img,
+                new_w,
+                new_h,
+                image::imageops::FilterType::Triangle,
+            );
+            dynamic_img = DynamicImage::ImageRgb8(resized);
         }
     }
 
@@ -361,12 +414,28 @@ mod tests {
 
         // Test 3: Cropping then downsampling
         let (both, crop_res, scale) =
-            process_dynamic_image(dynamic_img, Some(200), Some([100, 100, 400, 300]));
+            process_dynamic_image(dynamic_img.clone(), Some(200), Some([100, 100, 400, 300]));
         assert_eq!(crop_res, Some([100, 100, 400, 300]));
         assert_eq!(both.width(), 200);
         assert_eq!(both.height(), 150);
         assert!(scale.is_some());
         assert!((scale.unwrap() - 0.5).abs() < 0.01);
+
+        // Test 4: Default downsampling when max_dimension is None (caps at 1280)
+        let (default_scaled, crop_res, scale) =
+            process_dynamic_image(dynamic_img.clone(), None, None);
+        assert_eq!(crop_res, None);
+        assert_eq!(default_scaled.width(), 1280);
+        assert_eq!(default_scaled.height(), 720);
+        assert!(scale.is_some());
+        assert!((scale.unwrap() - (1280.0 / 1920.0)).abs() < 0.01);
+
+        // Test 5: Explicitly uncapped via Some(0)
+        let (uncapped, crop_res, scale) = process_dynamic_image(dynamic_img, Some(0), None);
+        assert_eq!(crop_res, None);
+        assert_eq!(uncapped.width(), 1920);
+        assert_eq!(uncapped.height(), 1080);
+        assert_eq!(scale, None);
     }
 
     #[test]
@@ -412,5 +481,3 @@ mod tests {
         assert!(result[0].height > 0);
     }
 }
-
-

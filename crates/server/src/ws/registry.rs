@@ -5,8 +5,8 @@ use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
 
 use at_pc_protocol::messages::ServerToAgentMessage;
-use at_pc_protocol::models::{HeartbeatMetrics, TerminalInfo};
 pub use at_pc_protocol::models::TerminalStatus;
+use at_pc_protocol::models::{HeartbeatMetrics, TerminalInfo};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 static SESSION_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -39,11 +39,42 @@ pub struct TerminalEntry {
     pub last_heartbeat_elapsed_secs: u64,
 }
 
+#[cfg(test)]
+#[derive(Debug)]
+struct MetaReadGate {
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+#[cfg(test)]
+impl Default for MetaReadGate {
+    fn default() -> Self {
+        Self {
+            entered: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
+}
+
+#[cfg(test)]
+impl MetaReadGate {
+    async fn wait(&self) {
+        self.entered.add_permits(1);
+        self.release
+            .acquire()
+            .await
+            .expect("meta read gate should remain open")
+            .forget();
+    }
+}
+
 /// Central registry managing all online/offline terminals and WebSocket sender channels
 pub struct TerminalRegistry {
     sessions: Arc<RwLock<HashMap<String, TerminalSession>>>,
     meta_store: Arc<TerminalMetaStore>,
     offline_threshold: Duration,
+    #[cfg(test)]
+    meta_read_gate: Option<Arc<MetaReadGate>>,
 }
 
 impl Default for TerminalRegistry {
@@ -69,6 +100,29 @@ impl TerminalRegistry {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             meta_store,
             offline_threshold,
+            #[cfg(test)]
+            meta_read_gate: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_meta_read_gate(
+        offline_threshold: Duration,
+        meta_store: Arc<TerminalMetaStore>,
+        meta_read_gate: Arc<MetaReadGate>,
+    ) -> Self {
+        Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            meta_store,
+            offline_threshold,
+            meta_read_gate: Some(meta_read_gate),
+        }
+    }
+
+    #[cfg(test)]
+    async fn wait_at_meta_read_gate(&self) {
+        if let Some(gate) = &self.meta_read_gate {
+            gate.wait().await;
         }
     }
 
@@ -97,15 +151,20 @@ impl TerminalRegistry {
             ws_sender,
         };
 
-        info!("Registered terminal: {} (session: {})", terminal_id, session_id);
+        info!(
+            "Registered terminal: {} (session: {})",
+            terminal_id, session_id
+        );
         sessions.insert(terminal_id, session);
         session_id
     }
 
     /// Remove a terminal session entirely from the registry
     pub async fn unregister(&self, terminal_id: &str) -> Option<TerminalSession> {
-        let mut sessions = self.sessions.write().await;
-        let removed = sessions.remove(terminal_id);
+        let removed = {
+            let mut sessions = self.sessions.write().await;
+            sessions.remove(terminal_id)
+        };
         if removed.is_some() {
             info!("Unregistered terminal: {}", terminal_id);
         }
@@ -190,47 +249,74 @@ impl TerminalRegistry {
         if sender.send(msg).is_err() {
             warn!("Failed to send message to terminal [{}]: channel receiver closed. Marking Offline.", terminal_id);
             self.set_status(terminal_id, TerminalStatus::Offline).await;
-            return Err(format!("Failed to send message to terminal {}", terminal_id));
+            return Err(format!(
+                "Failed to send message to terminal {}",
+                terminal_id
+            ));
         }
         Ok(())
     }
 
     /// List all registered terminals (including active sessions and persisted offline terminals)
     pub async fn list_terminals(&self) -> Vec<TerminalEntry> {
-        let sessions = self.sessions.read().await;
-        let mut entries: Vec<TerminalEntry> = Vec::new();
-        let mut seen_ids = std::collections::HashSet::new();
+        // Snapshot sessions before reading metadata so registry writers are never blocked by
+        // metadata I/O. A session present in this snapshot wins over persisted offline data.
+        let session_snapshot: Vec<(TerminalInfo, TerminalStatus, Option<HeartbeatMetrics>, u64)> = {
+            let sessions = self.sessions.read().await;
+            let mut snapshot = Vec::with_capacity(sessions.len());
+            for session in sessions.values() {
+                snapshot.push((
+                    session.info.clone(),
+                    session.status,
+                    session.latest_metrics.clone(),
+                    session.last_heartbeat_at.elapsed().as_secs(),
+                ));
+            }
+            snapshot
+        };
 
-        for s in sessions.values() {
-            seen_ids.insert(s.info.terminal_id.clone());
-            let meta = self.meta_store.get(&s.info.terminal_id).await;
-            entries.push(TerminalEntry {
-                info: s.info.clone(),
-                custom_name: meta.as_ref().and_then(|m| m.custom_name.clone()),
-                notes: meta.as_ref().and_then(|m| m.notes.clone()),
-                tags: meta.as_ref().map(|m| m.tags.clone()).unwrap_or_default(),
-                status: s.status,
-                latest_metrics: s.latest_metrics.clone(),
-                last_heartbeat_elapsed_secs: s.last_heartbeat_at.elapsed().as_secs(),
-            });
+        #[cfg(test)]
+        self.wait_at_meta_read_gate().await;
+
+        // One metadata snapshot keeps custom fields and offline supplementation consistent.
+        let all_meta = self.meta_store.list_all().await;
+        let mut entries = Vec::with_capacity(all_meta.len().max(session_snapshot.len()));
+
+        let mut active_ids = std::collections::HashSet::with_capacity(session_snapshot.len());
+        for (info, _, _, _) in &session_snapshot {
+            active_ids.insert(info.terminal_id.as_str());
         }
 
-        // Include any persisted terminals that are currently offline and not in active sessions
-        let all_meta = self.meta_store.list_all().await;
-        for (id, meta) in all_meta {
-            if !seen_ids.contains(&id) {
-                if let Some(info) = meta.last_known_info {
+        // Include persisted terminals absent from the session snapshot as offline.
+        for (terminal_id, meta) in all_meta.iter() {
+            if !active_ids.contains(terminal_id.as_str()) {
+                if let Some(info) = &meta.last_known_info {
                     entries.push(TerminalEntry {
-                        info,
-                        custom_name: meta.custom_name,
-                        notes: meta.notes,
-                        tags: meta.tags,
+                        info: info.clone(),
+                        custom_name: meta.custom_name.clone(),
+                        notes: meta.notes.clone(),
+                        tags: meta.tags.clone(),
                         status: TerminalStatus::Offline,
                         latest_metrics: None,
                         last_heartbeat_elapsed_secs: 999999,
                     });
                 }
             }
+        }
+
+        drop(active_ids);
+
+        for (info, status, latest_metrics, elapsed) in session_snapshot {
+            let meta = all_meta.get(&info.terminal_id);
+            entries.push(TerminalEntry {
+                info,
+                custom_name: meta.and_then(|m| m.custom_name.clone()),
+                notes: meta.and_then(|m| m.notes.clone()),
+                tags: meta.map(|m| m.tags.clone()).unwrap_or_default(),
+                status,
+                latest_metrics,
+                last_heartbeat_elapsed_secs: elapsed,
+            });
         }
 
         // Sort deterministically by terminal_id
@@ -240,21 +326,35 @@ impl TerminalRegistry {
 
     /// Get details of a single terminal
     pub async fn get_terminal(&self, terminal_id: &str) -> Option<TerminalEntry> {
-        let sessions = self.sessions.read().await;
-        if let Some(s) = sessions.get(terminal_id) {
-            let meta = self.meta_store.get(terminal_id).await;
+        let session_snapshot = {
+            let sessions = self.sessions.read().await;
+            sessions.get(terminal_id).map(|s| {
+                (
+                    s.info.clone(),
+                    s.status,
+                    s.latest_metrics.clone(),
+                    s.last_heartbeat_at.elapsed().as_secs(),
+                )
+            })
+        };
+
+        #[cfg(test)]
+        self.wait_at_meta_read_gate().await;
+
+        let meta = self.meta_store.get(terminal_id).await;
+        if let Some((info, status, latest_metrics, elapsed)) = session_snapshot {
             return Some(TerminalEntry {
-                info: s.info.clone(),
+                info,
                 custom_name: meta.as_ref().and_then(|m| m.custom_name.clone()),
                 notes: meta.as_ref().and_then(|m| m.notes.clone()),
-                tags: meta.as_ref().map(|m| m.tags.clone()).unwrap_or_default(),
-                status: s.status,
-                latest_metrics: s.latest_metrics.clone(),
-                last_heartbeat_elapsed_secs: s.last_heartbeat_at.elapsed().as_secs(),
+                tags: meta.map(|m| m.tags).unwrap_or_default(),
+                status,
+                latest_metrics,
+                last_heartbeat_elapsed_secs: elapsed,
             });
         }
 
-        if let Some(meta) = self.meta_store.get(terminal_id).await {
+        if let Some(meta) = meta {
             if let Some(info) = meta.last_known_info {
                 return Some(TerminalEntry {
                     info,
@@ -304,7 +404,9 @@ impl TerminalRegistry {
         let mut offline_ids = Vec::new();
 
         for (id, session) in sessions.iter_mut() {
-            if session.status != TerminalStatus::Offline && session.last_heartbeat_at.elapsed() > threshold {
+            if session.status != TerminalStatus::Offline
+                && session.last_heartbeat_at.elapsed() > threshold
+            {
                 session.status = TerminalStatus::Offline;
                 offline_ids.push(id.clone());
                 warn!("Terminal {} heartbeat timed out; marked Offline", id);
@@ -319,7 +421,10 @@ impl TerminalRegistry {
         self: Arc<Self>,
         sweep_interval: Duration,
     ) -> tokio::task::JoinHandle<()> {
-        self.start_sweep_task_with_handler(sweep_interval, Arc::new(crate::ws::handler::NoopMessageHandler))
+        self.start_sweep_task_with_handler(
+            sweep_interval,
+            Arc::new(crate::ws::handler::NoopMessageHandler),
+        )
     }
 
     /// Start a background sweep task that notifies a message handler when terminals are swept offline
@@ -338,5 +443,177 @@ impl TerminalRegistry {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use tokio::time::timeout;
+
+    fn terminal_info(terminal_id: &str) -> TerminalInfo {
+        TerminalInfo {
+            terminal_id: terminal_id.to_string(),
+            hostname: format!("host-{terminal_id}"),
+            username: "tester".to_string(),
+            lan_ip: "127.0.0.1".to_string(),
+            os_version: "test-os".to_string(),
+            agent_version: "test-agent".to_string(),
+        }
+    }
+
+    fn heartbeat(timestamp: i64) -> HeartbeatMetrics {
+        HeartbeatMetrics {
+            cpu_usage_percent: 12.5,
+            memory_used_mb: 1024,
+            memory_total_mb: 4096,
+            uptime_secs: 60,
+            timestamp,
+        }
+    }
+
+    async fn wait_until_meta_read_is_paused(gate: &MetaReadGate) {
+        timeout(Duration::from_secs(1), gate.entered.acquire())
+            .await
+            .expect("registry read should reach the metadata slow path")
+            .expect("meta read gate should remain open")
+            .forget();
+    }
+
+    async fn assert_registry_writes_make_progress(registry: Arc<TerminalRegistry>) {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let register_registry = Arc::clone(&registry);
+        let register = tokio::spawn(async move {
+            register_registry
+                .register(terminal_info("node-b"), tx)
+                .await;
+        });
+
+        let heartbeat_registry = Arc::clone(&registry);
+        let heartbeat = tokio::spawn(async move {
+            heartbeat_registry
+                .update_heartbeat("node-a", heartbeat(42))
+                .await
+        });
+
+        timeout(Duration::from_secs(1), async {
+            register.await.expect("register task should complete");
+            heartbeat
+                .await
+                .expect("heartbeat task should complete")
+                .expect("heartbeat should find node-a");
+        })
+        .await
+        .expect("sessions writers must not wait for the metadata slow path");
+    }
+
+    #[tokio::test]
+    async fn list_terminals_releases_sessions_lock_before_meta_read_and_uses_snapshots() {
+        let meta_store = Arc::new(TerminalMetaStore::in_memory());
+        let gate = Arc::new(MetaReadGate::default());
+        let registry = Arc::new(TerminalRegistry::with_meta_read_gate(
+            Duration::from_secs(15),
+            Arc::clone(&meta_store),
+            Arc::clone(&gate),
+        ));
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        registry.register(terminal_info("node-a"), tx).await;
+        registry
+            .update_terminal_meta(
+                "node-a",
+                Some("primary".to_string()),
+                None,
+                Some(vec!["online".to_string()]),
+            )
+            .await
+            .unwrap();
+        meta_store
+            .record_registration(&terminal_info("node-c"))
+            .await;
+        meta_store
+            .update_meta("node-d", Some("metadata-only".to_string()), None, None)
+            .await
+            .unwrap();
+
+        let list_registry = Arc::clone(&registry);
+        let list = tokio::spawn(async move { list_registry.list_terminals().await });
+        wait_until_meta_read_is_paused(&gate).await;
+
+        assert_registry_writes_make_progress(Arc::clone(&registry)).await;
+        gate.release.add_permits(1);
+
+        let entries = list.await.expect("list task should complete");
+        let ids: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.info.terminal_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["node-a", "node-b", "node-c"]);
+        assert_eq!(ids.iter().copied().collect::<HashSet<_>>().len(), ids.len());
+
+        let node_a = &entries[0];
+        assert_eq!(node_a.status, TerminalStatus::Online);
+        assert_eq!(node_a.custom_name.as_deref(), Some("primary"));
+        assert_eq!(node_a.tags, vec!["online".to_string()]);
+        assert!(node_a.latest_metrics.is_none());
+
+        // node-b registered after the sessions snapshot, so the later metadata snapshot
+        // supplements it as offline rather than mixing it into the earlier session view.
+        assert_eq!(entries[1].status, TerminalStatus::Offline);
+        assert_eq!(entries[2].status, TerminalStatus::Offline);
+
+        assert_eq!(
+            registry.get_status("node-b").await,
+            Some(TerminalStatus::Online)
+        );
+        assert!(registry
+            .sessions
+            .read()
+            .await
+            .get("node-a")
+            .and_then(|session| session.latest_metrics.as_ref())
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn get_terminal_releases_sessions_lock_before_meta_read_and_keeps_session_snapshot() {
+        let meta_store = Arc::new(TerminalMetaStore::in_memory());
+        let gate = Arc::new(MetaReadGate::default());
+        let registry = Arc::new(TerminalRegistry::with_meta_read_gate(
+            Duration::from_secs(15),
+            meta_store,
+            Arc::clone(&gate),
+        ));
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        registry.register(terminal_info("node-a"), tx).await;
+
+        let get_registry = Arc::clone(&registry);
+        let get = tokio::spawn(async move { get_registry.get_terminal("node-a").await });
+        wait_until_meta_read_is_paused(&gate).await;
+
+        assert_registry_writes_make_progress(Arc::clone(&registry)).await;
+        gate.release.add_permits(1);
+
+        let entry = get
+            .await
+            .expect("get task should complete")
+            .expect("node-a should come from the sessions snapshot");
+        assert_eq!(entry.info.terminal_id, "node-a");
+        assert_eq!(entry.status, TerminalStatus::Online);
+        assert!(entry.latest_metrics.is_none());
+
+        assert!(registry
+            .sessions
+            .read()
+            .await
+            .get("node-a")
+            .and_then(|session| session.latest_metrics.as_ref())
+            .is_some());
+        assert_eq!(
+            registry.get_status("node-b").await,
+            Some(TerminalStatus::Online)
+        );
     }
 }

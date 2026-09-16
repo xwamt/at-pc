@@ -18,15 +18,52 @@ pub struct ProcessInfo {
 }
 
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-static SYSTEM_CACHE: OnceLock<Mutex<System>> = OnceLock::new();
+pub const PROCESS_CACHE_TTL: Duration = Duration::from_millis(1000);
 
-fn get_cached_system() -> &'static Mutex<System> {
+struct CachedSystemState {
+    sys: System,
+    last_refresh: Instant,
+}
+
+static SYSTEM_CACHE: OnceLock<Mutex<CachedSystemState>> = OnceLock::new();
+
+fn get_cached_system() -> &'static Mutex<CachedSystemState> {
     SYSTEM_CACHE.get_or_init(|| {
         let mut sys = System::new();
         sys.refresh_processes();
-        Mutex::new(sys)
+        Mutex::new(CachedSystemState {
+            sys,
+            last_refresh: Instant::now(),
+        })
     })
+}
+
+/// Invalidates the process cache so that the next `list_processes` call refreshes unconditionally.
+pub fn invalidate_process_cache() {
+    let mut guard = get_cached_system().lock().unwrap();
+    guard.last_refresh = Instant::now()
+        .checked_sub(PROCESS_CACHE_TTL + Duration::from_millis(100))
+        .unwrap_or_else(Instant::now);
+}
+
+fn format_process_status(status: sysinfo::ProcessStatus) -> String {
+    match status {
+        sysinfo::ProcessStatus::Idle => "Idle".to_string(),
+        sysinfo::ProcessStatus::Run => "Run".to_string(),
+        sysinfo::ProcessStatus::Sleep => "Sleep".to_string(),
+        sysinfo::ProcessStatus::Stop => "Stop".to_string(),
+        sysinfo::ProcessStatus::Zombie => "Zombie".to_string(),
+        sysinfo::ProcessStatus::Tracing => "Tracing".to_string(),
+        sysinfo::ProcessStatus::Dead => "Dead".to_string(),
+        sysinfo::ProcessStatus::Wakekill => "Wakekill".to_string(),
+        sysinfo::ProcessStatus::Waking => "Waking".to_string(),
+        sysinfo::ProcessStatus::Parked => "Parked".to_string(),
+        sysinfo::ProcessStatus::LockBlocked => "LockBlocked".to_string(),
+        sysinfo::ProcessStatus::UninterruptibleDiskSleep => "UninterruptibleDiskSleep".to_string(),
+        other => format!("{:?}", other),
+    }
 }
 
 /// Lists running processes with optional filtering, sorting, and limit.
@@ -41,69 +78,75 @@ pub fn list_processes(
     limit: usize,
 ) -> Vec<ProcessInfo> {
     let sys_guard = get_cached_system();
-    let mut sys = sys_guard.lock().unwrap();
-    sys.refresh_processes();
+    let mut guard = sys_guard.lock().unwrap();
+    if guard.last_refresh.elapsed() >= PROCESS_CACHE_TTL {
+        guard.sys.refresh_processes();
+        guard.last_refresh = Instant::now();
+    }
 
     let filter_lower = filter.map(|f| f.trim().to_lowercase());
 
-    let mut procs: Vec<ProcessInfo> = sys
+    let mut proc_refs: Vec<(&Pid, &sysinfo::Process)> = guard
+        .sys
         .processes()
         .iter()
-        .filter_map(|(pid, proc_data)| {
-            let pid_u32 = pid.as_u32();
-            let name = proc_data.name().to_string();
-            let cmd: Vec<String> = proc_data.cmd().to_vec();
-
+        .filter(|(pid, proc_data)| {
             if let Some(ref query) = filter_lower {
-                let matches_name = name.to_lowercase().contains(query);
+                let raw_name = proc_data.name();
+                let pid_u32 = pid.as_u32();
+                let matches_name = raw_name.to_lowercase().contains(query);
                 let matches_pid = pid_u32.to_string().contains(query);
-                let matches_cmd = cmd.iter().any(|arg| arg.to_lowercase().contains(query));
+                let matches_cmd = proc_data
+                    .cmd()
+                    .iter()
+                    .any(|arg| arg.to_lowercase().contains(query));
 
-                if !matches_name && !matches_pid && !matches_cmd {
-                    return None;
-                }
+                matches_name || matches_pid || matches_cmd
+            } else {
+                true
             }
-
-            Some(ProcessInfo {
-                pid: pid_u32,
-                name,
-                cpu_usage: proc_data.cpu_usage(),
-                memory_mb: proc_data.memory() / (1024 * 1024),
-                exe_path: proc_data.exe().map(|p| p.to_string_lossy().to_string()),
-                cmd,
-                status: format!("{:?}", proc_data.status()),
-                start_time: proc_data.start_time(),
-                parent_pid: proc_data.parent().map(|p| p.as_u32()),
-            })
         })
         .collect();
 
-    // Sort
+    // Sort references
     match sort_by.unwrap_or("memory").to_lowercase().as_str() {
         "cpu" => {
-            procs.sort_by(|a, b| {
-                b.cpu_usage
-                    .partial_cmp(&a.cpu_usage)
+            proc_refs.sort_by(|a, b| {
+                b.1.cpu_usage()
+                    .partial_cmp(&a.1.cpu_usage())
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
         "pid" => {
-            procs.sort_by_key(|p| p.pid);
+            proc_refs.sort_by_key(|p| p.0.as_u32());
         }
         "name" => {
-            procs.sort_by_key(|p| p.name.to_lowercase());
+            proc_refs.sort_by_key(|p| p.1.name().to_lowercase());
         }
         _ => {
             // Default: sort by memory descending
-            procs.sort_by_key(|p| std::cmp::Reverse(p.memory_mb));
+            proc_refs.sort_by_key(|p| std::cmp::Reverse(p.1.memory()));
         }
     }
 
-    if limit > 0 && procs.len() > limit {
-        procs.truncate(limit);
+    if limit > 0 && proc_refs.len() > limit {
+        proc_refs.truncate(limit);
     }
 
-    procs
+    proc_refs
+        .into_iter()
+        .map(|(pid, proc_data)| ProcessInfo {
+            pid: pid.as_u32(),
+            name: proc_data.name().to_string(),
+            cpu_usage: proc_data.cpu_usage(),
+            memory_mb: proc_data.memory() / (1024 * 1024),
+            exe_path: proc_data.exe().map(|p| p.to_string_lossy().to_string()),
+            cmd: proc_data.cmd().to_vec(),
+            status: format_process_status(proc_data.status()),
+            start_time: proc_data.start_time(),
+            parent_pid: proc_data.parent().map(|p| p.as_u32()),
+        })
+        .collect()
 }
 
 /// Terminates a process by PID or executable name.
@@ -125,12 +168,17 @@ pub fn kill_process(pid: Option<u32>, name: Option<&str>, force: bool) -> Result
         if let Some(proc_data) = sys.processes().get(&pid_obj) {
             let proc_name = proc_data.name().to_string();
             let killed = if force {
-                proc_data.kill_with(Signal::Kill).unwrap_or_else(|| proc_data.kill())
+                proc_data
+                    .kill_with(Signal::Kill)
+                    .unwrap_or_else(|| proc_data.kill())
             } else {
-                proc_data.kill_with(Signal::Term).unwrap_or_else(|| proc_data.kill())
+                proc_data
+                    .kill_with(Signal::Term)
+                    .unwrap_or_else(|| proc_data.kill())
             };
 
             if killed {
+                invalidate_process_cache();
                 Ok(format!(
                     "Successfully terminated process PID {} ({})",
                     target_pid, proc_name
@@ -174,9 +222,13 @@ pub fn kill_process(pid: Option<u32>, name: Option<&str>, force: bool) -> Result
             let pid_obj = Pid::from_u32(pid_val);
             if let Some(proc_data) = sys.processes().get(&pid_obj) {
                 let killed = if force {
-                    proc_data.kill_with(Signal::Kill).unwrap_or_else(|| proc_data.kill())
+                    proc_data
+                        .kill_with(Signal::Kill)
+                        .unwrap_or_else(|| proc_data.kill())
                 } else {
-                    proc_data.kill_with(Signal::Term).unwrap_or_else(|| proc_data.kill())
+                    proc_data
+                        .kill_with(Signal::Term)
+                        .unwrap_or_else(|| proc_data.kill())
                 };
 
                 if killed {
@@ -192,6 +244,10 @@ pub fn kill_process(pid: Option<u32>, name: Option<&str>, force: bool) -> Result
                 "Failed to terminate processes matching '{}': {:?}",
                 target_name, failed_pids
             ));
+        }
+
+        if !terminated_pids.is_empty() {
+            invalidate_process_cache();
         }
 
         Ok(format!(

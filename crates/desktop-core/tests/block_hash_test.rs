@@ -18,7 +18,7 @@ fn test_block_hash_determinism_and_single_byte_mutation() {
 
     // 计算受影响的块坐标: x=200 -> col=200/64=3, y=100 -> row=100/64=1
     let cols = width.div_ceil(64) as usize;
-    let target_block_idx = 1 * cols + 3;
+    let target_block_idx = cols + 3;
 
     // 验证仅目标块哈希改变，其余块哈希完全一致
     for (i, (&orig, &curr)) in baseline.iter().zip(mutated.iter()).enumerate() {

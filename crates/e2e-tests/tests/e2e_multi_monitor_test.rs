@@ -9,9 +9,9 @@
 //! - Step 7: JSON-RPC MCP protocol regression for multi-monitor tool invocations
 //! - Step 8: Negative origin dual-monitor E2E regression over WebSocket
 
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 
@@ -238,15 +238,38 @@ async fn test_full_closed_loop_e2e_multi_monitor_workflow() {
     // Step 2: `capture_screen` with `display_index: 1` -> verify screenshot of monitor 1
     // ---------------------------------------------------------------------
     let cap_val = router
-        .dispatch_tool_call("capture_screen", json!({ "display_index": 1, "format": "jpeg" }))
+        .dispatch_tool_call(
+            "capture_screen",
+            json!({ "display_index": 1, "format": "jpeg" }),
+        )
         .await
         .expect("Step 2: capture_screen on monitor 1 failed");
-    assert_eq!(cap_val["display_index"], 1, "capture_screen must return display_index: 1");
-    assert_eq!(cap_val["width"], 2560, "Expected width matching monitor 1 width");
-    assert_eq!(cap_val["height"], 1440, "Expected height matching monitor 1 height");
+    assert_eq!(
+        cap_val["display_index"], 1,
+        "capture_screen must return display_index: 1"
+    );
+    let orig_w = cap_val["original_width"]
+        .as_u64()
+        .or_else(|| cap_val["width"].as_u64())
+        .unwrap_or(0);
+    assert_eq!(
+        orig_w, 2560,
+        "Expected width matching monitor 1 width"
+    );
+    let orig_h = cap_val["original_height"]
+        .as_u64()
+        .or_else(|| cap_val["height"].as_u64())
+        .unwrap_or(0);
+    assert_eq!(
+        orig_h, 1440,
+        "Expected height matching monitor 1 height"
+    );
     assert_eq!(cap_val["format"], "jpeg");
     let base64_str = cap_val["base64_data"].as_str().unwrap_or("");
-    assert!(base64_str.starts_with("data:image/jpeg;base64,"), "Invalid data URI format");
+    assert!(
+        base64_str.starts_with("data:image/jpeg;base64,"),
+        "Invalid data URI format"
+    );
 
     // ---------------------------------------------------------------------
     // Step 3: `get_marked_screen` with `display_index: 1`
@@ -264,8 +287,13 @@ async fn test_full_closed_loop_e2e_multi_monitor_workflow() {
         .await
         .expect("Step 3: get_marked_screen on monitor 1 failed");
 
-    assert_eq!(marked_val["display_index"], 1, "get_marked_screen must return display_index: 1");
-    let marks = marked_val["marks"].as_array().expect("Marks array must be present");
+    assert_eq!(
+        marked_val["display_index"], 1,
+        "get_marked_screen must return display_index: 1"
+    );
+    let marks = marked_val["marks"]
+        .as_array()
+        .expect("Marks array must be present");
     assert_eq!(marks.len(), 9, "Grid 3x3 strategy should generate 9 marks");
 
     // Verify all marks are properly offset by Monitor 1's origin (x >= 1920)
