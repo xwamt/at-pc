@@ -1,0 +1,12 @@
+[package]
+name = "at-pc-desktop-core"
+version = "1.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+image = { version = "=0.25.10", default-features = false, features = ["jpeg"] }

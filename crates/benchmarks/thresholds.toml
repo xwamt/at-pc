@@ -1,0 +1,22 @@
+schema_version = 1
+baseline_name = "p1-7"
+comparison_target = "P1-3"
+
+# Informational thresholds for same-machine Criterion comparisons. Do not use
+# wall-clock values from shared CI runners as a hard gate.
+[thresholds]
+relative_regression_percent = 10.0
+relative_improvement_target_percent = 5.0
+nanosecond_decision_noise_percent = 20.0
+block_hash_1080p_ms_max = 1.00
+block_hash_2560_ms_max = 2.00
+
+[benchmarks.desktop_core]
+block_hash_1080p_ms_max = 1.00
+block_hash_2560_ms_max = 2.00
+
+[requirements]
+same_host = true
+same_power_profile = true
+release_profile = true
+minimum_repeated_runs = 3

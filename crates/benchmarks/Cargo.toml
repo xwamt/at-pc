@@ -1,0 +1,28 @@
+[package]
+name = "at-pc-benchmarks"
+version = "1.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+at-pc-desktop-core = { path = "../desktop-core" }
+at-pc-protocol = { path = "../protocol" }
+at-pc-server = { path = "../server" }
+base64 = "0.22"
+criterion = { version = "=0.5.1", features = ["html_reports"] }
+image = { version = "=0.25.10", default-features = false, features = ["jpeg"] }
+serde_json = "1.0"
+tokio = { version = "=1.53.1", features = ["rt", "sync"] }
+xcap = "0.9"
+
+[[bench]]
+name = "p1_hot_paths"
+harness = false
+
+[[bench]]
+name = "p2_perf_deep"
+harness = false
