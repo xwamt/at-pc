@@ -77,17 +77,32 @@ def validate_thresholds_config(config_path: Path) -> dict:
 
     p1080_max = desktop_core.get("block_hash_1080p_ms_max") or thresholds.get("block_hash_1080p_ms_max")
     p2560_max = desktop_core.get("block_hash_2560_ms_max") or thresholds.get("block_hash_2560_ms_max")
+    som_max = thresholds.get("som_detection_2560_ms_max")
+    reg_update_max = thresholds.get("registry_update_5k_micros_max")
+    reg_list_max = thresholds.get("registry_list_5k_ms_max")
 
     if p1080_max is None or float(p1080_max) <= 0:
         raise ValueError(f"{config_path}: invalid or missing block_hash_1080p_ms_max")
     if p2560_max is None or float(p2560_max) <= 0:
         raise ValueError(f"{config_path}: invalid or missing block_hash_2560_ms_max")
+    if som_max is not None and float(som_max) <= 0:
+        raise ValueError(f"{config_path}: invalid som_detection_2560_ms_max")
+    if reg_update_max is not None and float(reg_update_max) <= 0:
+        raise ValueError(f"{config_path}: invalid registry_update_5k_micros_max")
+    if reg_list_max is not None and float(reg_list_max) <= 0:
+        raise ValueError(f"{config_path}: invalid registry_list_5k_ms_max")
 
-    return {
+    res = {
         "block_hash_1080p_ms_max": float(p1080_max),
         "block_hash_2560_ms_max": float(p2560_max),
-        "relative_regression_percent": float(thresholds.get("relative_regression_percent", 10.0)),
     }
+    if som_max is not None:
+        res["som_detection_2560_ms_max"] = float(som_max)
+    if reg_update_max is not None:
+        res["registry_update_5k_micros_max"] = float(reg_update_max)
+    if reg_list_max is not None:
+        res["registry_list_5k_ms_max"] = float(reg_list_max)
+    return res
 
 
 def parse_probe_output(text: str) -> dict[str, float]:

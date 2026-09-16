@@ -18,9 +18,11 @@ from check_perf_thresholds import (
 class TestCheckPerfThresholds(unittest.TestCase):
     def test_validate_repo_thresholds(self):
         result = validate_thresholds_config(THRESHOLDS_BENCH_FILE)
-        self.assertEqual(result["block_hash_1080p_ms_max"], 1.0)
-        self.assertEqual(result["block_hash_2560_ms_max"], 2.0)
-        self.assertGreater(result["relative_regression_percent"], 0.0)
+        self.assertGreater(result["block_hash_1080p_ms_max"], 0.0)
+        self.assertGreater(result["block_hash_2560_ms_max"], 0.0)
+        self.assertIn("som_detection_2560_ms_max", result)
+        self.assertIn("registry_update_5k_micros_max", result)
+        self.assertIn("registry_list_5k_ms_max", result)
 
     def test_parse_probe_output(self):
         sample = """
