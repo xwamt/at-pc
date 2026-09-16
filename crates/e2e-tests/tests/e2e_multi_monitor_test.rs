@@ -252,18 +252,12 @@ async fn test_full_closed_loop_e2e_multi_monitor_workflow() {
         .as_u64()
         .or_else(|| cap_val["width"].as_u64())
         .unwrap_or(0);
-    assert_eq!(
-        orig_w, 2560,
-        "Expected width matching monitor 1 width"
-    );
+    assert_eq!(orig_w, 2560, "Expected width matching monitor 1 width");
     let orig_h = cap_val["original_height"]
         .as_u64()
         .or_else(|| cap_val["height"].as_u64())
         .unwrap_or(0);
-    assert_eq!(
-        orig_h, 1440,
-        "Expected height matching monitor 1 height"
-    );
+    assert_eq!(orig_h, 1440, "Expected height matching monitor 1 height");
     assert_eq!(cap_val["format"], "jpeg");
     let base64_str = cap_val["base64_data"].as_str().unwrap_or("");
     assert!(

@@ -182,7 +182,12 @@ fn dedup_detection_rate() {
     let keepalive = Duration::from_millis(1000);
     println!(
         "\nkeepalive decision when undetected: should_send_frame(same,same,999ms,1s) = {}",
-        should_send_frame(base_hashes[0], base_hashes[0], Duration::from_millis(999), keepalive)
+        should_send_frame(
+            base_hashes[0],
+            base_hashes[0],
+            Duration::from_millis(999),
+            keepalive
+        )
     );
 }
 

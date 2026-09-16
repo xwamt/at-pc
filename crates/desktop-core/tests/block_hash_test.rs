@@ -172,13 +172,24 @@ fn test_speedup_1080p_word_wise_vs_byte_by_byte() {
 
     if !cfg!(debug_assertions) {
         assert!(
-            dur_new.as_micros() < 1500,
-            "Release mode 1080p block hash should take <1.5ms, took {:?}",
+            dur_new.as_micros() < 1200,
+            "Release mode 1080p block hash should take <1.2ms, took {:?}",
             dur_new
         );
         assert!(
             speedup >= 8.0,
             "Expected >=8x-10x speedup in release mode, got {:.2}x",
+            speedup
+        );
+    } else {
+        assert!(
+            dur_new.as_millis() < 25,
+            "Debug mode 1080p block hash should take <25ms, took {:?}",
+            dur_new
+        );
+        assert!(
+            speedup >= 1.3,
+            "Expected >=1.3x speedup even in unoptimized debug mode, got {:.2}x",
             speedup
         );
     }

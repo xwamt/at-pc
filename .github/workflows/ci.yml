@@ -94,10 +94,7 @@ jobs:
         run: cargo test --workspace --all-features --locked
 
       - name: Check benchmark compilation and performance thresholds
-        run: |
-          cargo bench -p at-pc-benchmarks --no-run
-          python3 scripts/check_perf_thresholds.py --check-config
-          python3 scripts/test_check_perf_thresholds.py
+        run: ./scripts/check_perf_thresholds.sh
 
       - name: Build release artifacts
         run: cargo build --workspace --release --all-features --locked

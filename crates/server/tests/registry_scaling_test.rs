@@ -77,6 +77,12 @@ async fn test_update_terminal_meta_latency_scaled_1000() {
         list_duration
     );
 
+    assert!(
+        list_duration < Duration::from_millis(5),
+        "Expected list_terminals on 1,000 terminals < 5ms, got {:?}",
+        list_duration
+    );
+
     assert_eq!(list.len(), 1000);
     assert_eq!(list[0].info.terminal_id, "term-0000");
     assert_eq!(list[0].custom_name.as_deref(), Some("bench-name-0000"));
@@ -153,6 +159,12 @@ async fn test_update_terminal_meta_latency_scaled_5000() {
 
     println!(
         "[Benchmark] list_terminals on 5000 terminals: {:?}",
+        list_duration
+    );
+
+    assert!(
+        list_duration < Duration::from_millis(15),
+        "Expected list_terminals on 5,000 terminals < 15ms, got {:?}",
         list_duration
     );
 

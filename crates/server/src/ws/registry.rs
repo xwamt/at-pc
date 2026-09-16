@@ -278,33 +278,9 @@ impl TerminalRegistry {
         #[cfg(test)]
         self.wait_at_meta_read_gate().await;
 
-        // One metadata snapshot keeps custom fields and offline supplementation consistent.
+        // Fast in-memory metadata read (Arc<HashMap> read lock is <1µs)
         let all_meta = self.meta_store.list_all().await;
         let mut entries = Vec::with_capacity(all_meta.len().max(session_snapshot.len()));
-
-        let mut active_ids = std::collections::HashSet::with_capacity(session_snapshot.len());
-        for (info, _, _, _) in &session_snapshot {
-            active_ids.insert(info.terminal_id.as_str());
-        }
-
-        // Include persisted terminals absent from the session snapshot as offline.
-        for (terminal_id, meta) in all_meta.iter() {
-            if !active_ids.contains(terminal_id.as_str()) {
-                if let Some(info) = &meta.last_known_info {
-                    entries.push(TerminalEntry {
-                        info: info.clone(),
-                        custom_name: meta.custom_name.clone(),
-                        notes: meta.notes.clone(),
-                        tags: meta.tags.clone(),
-                        status: TerminalStatus::Offline,
-                        latest_metrics: None,
-                        last_heartbeat_elapsed_secs: 999999,
-                    });
-                }
-            }
-        }
-
-        drop(active_ids);
 
         for (info, status, latest_metrics, elapsed) in session_snapshot {
             let meta = all_meta.get(&info.terminal_id);
@@ -319,8 +295,34 @@ impl TerminalRegistry {
             });
         }
 
+        // Include persisted terminals absent from active session snapshot as offline.
+        if entries.len() < all_meta.len() {
+            let active_ids: std::collections::HashSet<&str> = entries
+                .iter()
+                .map(|e| e.info.terminal_id.as_str())
+                .collect();
+            let mut offline_entries = Vec::new();
+            for (terminal_id, meta) in all_meta.iter() {
+                if !active_ids.contains(terminal_id.as_str()) {
+                    if let Some(info) = &meta.last_known_info {
+                        offline_entries.push(TerminalEntry {
+                            info: info.clone(),
+                            custom_name: meta.custom_name.clone(),
+                            notes: meta.notes.clone(),
+                            tags: meta.tags.clone(),
+                            status: TerminalStatus::Offline,
+                            latest_metrics: None,
+                            last_heartbeat_elapsed_secs: 999999,
+                        });
+                    }
+                }
+            }
+            drop(active_ids);
+            entries.extend(offline_entries);
+        }
+
         // Sort deterministically by terminal_id
-        entries.sort_by(|a, b| a.info.terminal_id.cmp(&b.info.terminal_id));
+        entries.sort_unstable_by(|a, b| a.info.terminal_id.cmp(&b.info.terminal_id));
         entries
     }
 

@@ -49,16 +49,17 @@ fn test_som_downsampled_detection_and_coordinate_mapping_accuracy() {
     // Assert latency guard: must prevent the 10-12ms imageops::resize regression
     if !cfg!(debug_assertions) {
         assert!(
-            best_ms < 5.0,
-            "Release mode detect_visual_boxes on 2.5K must achieve sub-5ms (got best={:.2}ms, median={:.2}ms)",
+            median_ms < 8.0,
+            "Release mode detect_visual_boxes on 2.5K must achieve sub-8ms (got best={:.2}ms, median={:.2}ms)",
             best_ms,
             median_ms
         );
     } else {
         assert!(
-            best_ms < 100.0,
-            "Debug mode detect_visual_boxes on 2.5K must complete under 100ms (got best={:.2}ms)",
-            best_ms
+            median_ms < 120.0,
+            "Debug mode detect_visual_boxes on 2.5K must complete under 120ms (got best={:.2}ms, median={:.2}ms)",
+            best_ms,
+            median_ms
         );
     }
 

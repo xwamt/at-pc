@@ -688,12 +688,14 @@ pub fn fast_downsample_rgba(img: &RgbaImage, target_w: u32, target_h: u32) -> Rg
     let src_raw = img.as_raw();
     let mut dst = vec![0u8; target_w_us * target_h_us * 4];
 
+    // Center-aligned nearest-neighbor coordinate mapping: floor((i + 0.5) * ratio)
+    // Aligns 100% with standard nearest-neighbor sampling without the generic overhead.
     let x_indices: Vec<usize> = (0..target_w_us)
-        .map(|x| (x * src_w) / target_w_us)
+        .map(|x| (((x * 2 + 1) * src_w) / (target_w_us * 2)).min(src_w - 1))
         .collect();
 
     for dy in 0..target_h_us {
-        let sy = (dy * src_h) / target_h_us;
+        let sy = (((dy * 2 + 1) * src_h) / (target_h_us * 2)).min(src_h - 1);
         let src_row_offset = sy * src_w * 4;
         let dst_row_offset = dy * target_w_us * 4;
         let dst_row = &mut dst[dst_row_offset..dst_row_offset + target_w_us * 4];
@@ -705,7 +707,8 @@ pub fn fast_downsample_rgba(img: &RgbaImage, target_w: u32, target_h: u32) -> Rg
         }
     }
 
-    RgbaImage::from_raw(target_w, target_h, dst).unwrap_or_else(|| RgbaImage::new(target_w, target_h))
+    RgbaImage::from_raw(target_w, target_h, dst)
+        .unwrap_or_else(|| RgbaImage::new(target_w, target_h))
 }
 
 /// Strategy: Detects visual bounding boxes for non-accessible Canvas, games, and 自绘 applications.
