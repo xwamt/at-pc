@@ -20,13 +20,21 @@ fn test_som_downsampled_detection_and_coordinate_mapping_accuracy() {
     draw_rect_outline(&mut canvas, 640, 400, 320, 160, 2, Rgba([0, 0, 0, 255]));
 
     // 2. Measure runtime of detect_visual_boxes on 2560x1600 (should downsample to 1280 internally)
-    let start = Instant::now();
-    let detected = detect_visual_boxes(&canvas, [0, 0], 1.0);
-    let elapsed = start.elapsed();
+    let mut durations = Vec::new();
+    let mut detected = Vec::new();
+    for _ in 0..3 {
+        let start = Instant::now();
+        detected = detect_visual_boxes(&canvas, [0, 0], 1.0);
+        durations.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    durations.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let best_ms = durations[0];
+    let median_ms = durations[1];
 
     println!(
-        "detect_visual_boxes on 2560x1600 took: {:.2}ms, detected {} marks",
-        elapsed.as_secs_f64() * 1000.0,
+        "detect_visual_boxes on 2560x1600: best={:.2}ms, median={:.2}ms, detected {} marks",
+        best_ms,
+        median_ms,
         detected.len()
     );
     for m in &detected {
@@ -37,6 +45,22 @@ fn test_som_downsampled_detection_and_coordinate_mapping_accuracy() {
         !detected.is_empty(),
         "Should detect visual boxes on 2560x1600 canvas"
     );
+
+    // Assert latency guard: must prevent the 10-12ms imageops::resize regression
+    if !cfg!(debug_assertions) {
+        assert!(
+            best_ms < 5.0,
+            "Release mode detect_visual_boxes on 2.5K must achieve sub-5ms (got best={:.2}ms, median={:.2}ms)",
+            best_ms,
+            median_ms
+        );
+    } else {
+        assert!(
+            best_ms < 100.0,
+            "Debug mode detect_visual_boxes on 2.5K must complete under 100ms (got best={:.2}ms)",
+            best_ms
+        );
+    }
 
     // 3. Find detected box corresponding to the button at (640, 400, 320, 160)
     let matched_mark = detected

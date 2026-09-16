@@ -161,7 +161,8 @@ pub fn is_frame_dirty(previous: &[u64], current: &[u64]) -> bool {
     dirty_block_ratio(previous, current) >= DIRTY_BLOCK_RATIO_THRESHOLD
 }
 
-/// Computes the sampling hash used by the desktop stream's dirty-frame check.
+/// Computes the legacy sampling hash used by the desktop stream's dirty-frame check.
+#[deprecated(note = "Replaced by word-wise compute_block_hashes for tile-based dirty checking")]
 pub fn compute_sample_hash(raw_rgba: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     for chunk in raw_rgba.chunks(256) {
@@ -302,6 +303,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn sample_hash_is_deterministic_and_observes_each_sampled_byte() {
         let mut bytes = vec![0_u8; 513];
         let initial = compute_sample_hash(&bytes);

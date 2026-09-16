@@ -83,3 +83,78 @@ async fn test_update_terminal_meta_latency_scaled_1000() {
     assert_eq!(list[999].info.terminal_id, "term-0999");
     assert_eq!(list[999].custom_name.as_deref(), Some("bench-name-0999"));
 }
+
+#[tokio::test]
+async fn test_update_terminal_meta_latency_scaled_5000() {
+    let registry = Arc::new(TerminalRegistry::new());
+    let (tx, _rx) = mpsc::unbounded_channel();
+
+    // 1. Register 5,000 terminals
+    for i in 0..5000 {
+        let info = TerminalInfo {
+            terminal_id: format!("term-{:05}", i),
+            hostname: format!("HOST-{:05}", i),
+            username: "tester".to_string(),
+            lan_ip: "10.0.0.1".to_string(),
+            os_version: "Linux".to_string(),
+            agent_version: "1.0.0".to_string(),
+        };
+        registry.register(info, tx.clone()).await;
+    }
+    assert_eq!(registry.count().await, 5000);
+
+    // Warm-up to prime runtime and allocator
+    for i in 0..100 {
+        let term_id = format!("term-{:05}", i);
+        let _ = registry
+            .update_terminal_meta(
+                &term_id,
+                Some(format!("warmup-{}", i)),
+                Some("warmup".to_string()),
+                Some(vec!["warmup".to_string()]),
+            )
+            .await;
+    }
+
+    // 2. Measure update_terminal_meta latency across 2,000 updates on 5,000 scaled registry
+    let sample_count = 2000;
+    let start = Instant::now();
+    for i in 0..sample_count {
+        let term_id = format!("term-{:05}", i);
+        let res = registry
+            .update_terminal_meta(
+                &term_id,
+                Some(format!("prod-name-{:05}", i)),
+                Some(format!("metadata entry {:05}", i)),
+                Some(vec!["cluster-prod".to_string(), "scale-5000".to_string()]),
+            )
+            .await;
+        assert!(res.is_ok());
+    }
+    let total_duration = start.elapsed();
+    let avg_latency = total_duration / sample_count as u32;
+
+    println!(
+        "\n[Benchmark] 5000 terminals: sample {} updates, total time = {:?}, avg latency = {:?} (target < 50µs / 0.05ms)",
+        sample_count, total_duration, avg_latency
+    );
+
+    // Target: update_terminal_meta latency < 0.05ms (50µs)
+    assert!(
+        avg_latency < Duration::from_micros(50),
+        "Expected avg update_terminal_meta latency < 0.05ms (50µs) at 5,000 terminals, got {:?}",
+        avg_latency
+    );
+
+    // 3. Verify list_terminals count
+    let start_list = Instant::now();
+    let list = registry.list_terminals().await;
+    let list_duration = start_list.elapsed();
+
+    println!(
+        "[Benchmark] list_terminals on 5000 terminals: {:?}",
+        list_duration
+    );
+
+    assert_eq!(list.len(), 5000);
+}

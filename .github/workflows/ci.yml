@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  frontend:
+    name: Frontend lint, test, and build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: crates/server/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: crates/server/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint, typecheck, test, and build
+        run: |
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
+
+  quality:
+    name: Format, lint, test, release build
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_DIR: target/linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: crates/server/frontend/package-lock.json
+
+      - name: Build embedded dashboard assets
+        working-directory: crates/server/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            clang libclang-dev pkg-config \
+            libdbus-1-dev libegl1-mesa-dev libpipewire-0.3-dev \
+            libwayland-dev libxcb1-dev libxkbcommon-dev libxrandr-dev
+
+      - name: Resolve pinned Rust toolchain
+        run: rustc --version --verbose
+
+      - name: Check target-dir convention
+        run: |
+          python3 scripts/check_target_dir_convention.py
+          python3 scripts/test_check_target_dir_convention.py
+
+      - name: Check agent/server have no dev-dependency cycle
+        run: |
+          python3 scripts/check_no_agent_server_dev_cycle.py
+          python3 scripts/test_check_no_agent_server_dev_cycle.py
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ${{ env.CARGO_TARGET_DIR }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Run workspace tests
+        run: cargo test --workspace --all-features --locked
+
+      - name: Check benchmark compilation and performance thresholds
+        run: |
+          cargo bench -p at-pc-benchmarks --no-run
+          python3 scripts/check_perf_thresholds.py --check-config
+          python3 scripts/test_check_perf_thresholds.py
+
+      - name: Build release artifacts
+        run: cargo build --workspace --release --all-features --locked
+
+  platform-check:
+    name: Check ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: x86_64-apple-darwin
+            cargo_target_dir: target/mac
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            cargo_target_dir: target/win
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_TARGET_DIR: ${{ matrix.cargo_target_dir }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: crates/server/frontend/package-lock.json
+
+      - name: Build embedded dashboard assets
+        working-directory: crates/server/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Resolve pinned Rust toolchain
+        run: rustc --version --verbose
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ${{ env.CARGO_TARGET_DIR }}
+
+      - name: Check all targets and features
+        run: cargo check --workspace --all-targets --all-features --locked
+
+  security:
+    name: Dependency policy and advisories
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve pinned Rust toolchain
+        run: rustc --version --verbose
+
+      - name: Install pinned security tools
+        run: |
+          cargo install cargo-deny --version 0.20.2 --locked
+          cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Check dependency policy
+        run: cargo deny check
+
+      - name: Check security advisories
+        run: cargo audit

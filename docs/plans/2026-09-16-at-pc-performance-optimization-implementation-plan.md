@@ -662,20 +662,20 @@ git commit -m "perf(agent): cap default screen capture to 1280 and eliminate dup
 - Consumes: `detect_visual_boxes`, `get_marked_screen`
 - Produces: 2.5K 下视觉轮廓检测耗时从 ~10ms 降至 <3ms，端到端编码耗时显著降低。
 
-- [ ] **Step 1: 编写 SoM 降采样检测精准度对比测试**
+- [x] **Step 1: 编写 SoM 降采样检测精准度对比测试**
 
 在 `crates/agent/tests/som_perf_test.rs`：
 验证将 2560x1600 原图下采样至 1280 进行边缘检测后，坐标等比例映射回原图，所得到的边界框精度误差在 2 像素以内。
 
-- [ ] **Step 2: 在 `som.rs` 中落地检测前置降采样**
+- [x] **Step 2: 在 `som.rs` 中落地检测前置降采样**
 
-在执行 `detect_visual_boxes` 之前，如果原图分辨率大于 1280，先进行双线性/近邻下采样执行轮廓寻找，最后将识别到的 `ScreenMark` 坐标映射回目标分辨率。
+在执行 `detect_visual_boxes` 之前，如果原图分辨率大于 1280，先通过无泛型开销的 `fast_downsample_rgba` 进行跨步近邻采样执行轮廓寻找，最后将识别到的 `ScreenMark` 坐标映射回目标分辨率。
 
-- [ ] **Step 3: 运行基准验证**
+- [x] **Step 3: 运行基准验证**
 
 量化指标：2.5K 分辨率下 `detect_visual_boxes` 耗时从 9.58ms 降至 2.5ms 内。
 
-- [ ] **Step 4: Git 提交**
+- [x] **Step 4: Git 提交**
 
 ```bash
 git add crates/agent/src/tools/som.rs crates/agent/tests/
@@ -690,21 +690,21 @@ git commit -m "perf(som): optimize visual contour detection with downsampling"
 - Run: `crates/benchmarks/examples/perf_probe.rs`
 - Run: 全套端到端验收脚本
 
-- [ ] **Step 1: 运行全套 Cargo 单元与集成测试**
+- [x] **Step 1: 运行全套 Cargo 单元与集成测试**
 
 运行：`cargo test --workspace`
 预期：所有测试 100% 通过。
 
-- [ ] **Step 2: 运行性能探针验收报告**
+- [x] **Step 2: 运行性能探针验收报告**
 
 运行：`cargo run --release -p at-pc-benchmarks --example perf_probe`
 验证所有 1~8 节基准数据符合优化预期目标。
 
-- [ ] **Step 3: 更新性能跟踪文档与状态**
+- [x] **Step 3: 更新性能跟踪文档与状态**
 
 更新 `docs/plans/2026-09-16-at-pc-performance-deep-dive-ii.md` 中的优化落实状态为已落地。
 
-- [ ] **Step 4: 最终提交**
+- [x] **Step 4: 最终提交**
 
 ```bash
 git add docs/

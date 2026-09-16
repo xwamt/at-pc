@@ -4,7 +4,7 @@
 //!
 //! Run with: `cargo run --release -p at-pc-benchmarks --example perf_probe`
 
-use at_pc_desktop_core::{compute_sample_hash, encode_jpeg, fast_rgba_to_rgb, should_send_frame};
+use at_pc_desktop_core::{compute_block_hashes, encode_jpeg, fast_rgba_to_rgb, should_send_frame};
 use at_pc_protocol::messages::BinaryDesktopFrame;
 use at_pc_server::router::McpRouter;
 use at_pc_server::ws::handler::AgentMessageHandler;
@@ -98,13 +98,13 @@ fn stage_attribution() {
     let rgba = rgba_fixture(1920, 1080);
     let rgb = rgb_fixture(1920, 1080);
 
-    let hash = median_ms(40, || compute_sample_hash(rgba.as_raw()));
+    let hash = median_ms(40, || compute_block_hashes(rgba.as_raw(), 1920, 1080));
     let convert = median_ms(15, || fast_rgba_to_rgb(&rgba));
     let encode = median_ms(10, || encode_jpeg(&rgb, 55).expect("encode"));
     let total = hash + convert + encode;
 
     for (stage, ms) in [
-        ("dirty-check hash", hash),
+        ("dirty-check block hash", hash),
         ("RGBA -> RGB", convert),
         ("JPEG encode q55", encode),
     ] {
@@ -127,20 +127,19 @@ fn stage_attribution() {
     );
 }
 
-/// The dirty-frame check samples one byte per 256 bytes. This measures how
+/// The dirty-frame check uses 64x64 word-wise block hashes. This measures how
 /// often a realistic small UI change is actually noticed.
 fn dedup_detection_rate() {
-    heading("3. DIRTY-FRAME DETECTION RATE (sample hash sampling density)");
+    heading("3. DIRTY-FRAME DETECTION RATE (word-wise 64x64 block hashes)");
     let width = 1920_u32;
     let height = 1080_u32;
     let base = rgba_fixture(width, height);
-    let base_hash = compute_sample_hash(base.as_raw());
+    let base_hashes = compute_block_hashes(base.as_raw(), width, height);
     let raw_len = base.as_raw().len();
     println!(
-        "frame 1920x1080 RGBA = {} bytes; sampled = {} bytes (1 per 256 = {:.3}%)",
+        "frame 1920x1080 RGBA = {} bytes; 64x64 tiles = {} blocks (word-wise hashed)",
         raw_len,
-        raw_len / 256 + 1,
-        100.0 / 256.0
+        base_hashes.len(),
     );
 
     // A localized change: draw a filled rectangle at a deterministic series of
@@ -167,7 +166,7 @@ fn dedup_detection_rate() {
                     pixel.0[2] = !pixel.0[2];
                 }
             }
-            if compute_sample_hash(frame.as_raw()) != base_hash {
+            if compute_block_hashes(frame.as_raw(), width, height) != base_hashes {
                 detected += 1;
             }
         }
@@ -183,7 +182,7 @@ fn dedup_detection_rate() {
     let keepalive = Duration::from_millis(1000);
     println!(
         "\nkeepalive decision when undetected: should_send_frame(same,same,999ms,1s) = {}",
-        should_send_frame(base_hash, base_hash, Duration::from_millis(999), keepalive)
+        should_send_frame(base_hashes[0], base_hashes[0], Duration::from_millis(999), keepalive)
     );
 }
 

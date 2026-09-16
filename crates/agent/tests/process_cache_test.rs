@@ -1,8 +1,12 @@
 use at_pc_agent::tools::process::{invalidate_process_cache, list_processes, PROCESS_CACHE_TTL};
+use std::sync::Mutex;
 use std::time::Instant;
+
+static SERIAL_MUTEX: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_list_processes_ttl_cache_speedup() {
+    let _guard = SERIAL_MUTEX.lock().unwrap();
     // Force cache invalidation so the first call performs a full refresh
     invalidate_process_cache();
 
@@ -62,6 +66,7 @@ fn test_list_processes_ttl_cache_speedup() {
 
 #[test]
 fn test_list_processes_cache_with_filtering_and_sorting() {
+    let _guard = SERIAL_MUTEX.lock().unwrap();
     invalidate_process_cache();
 
     // Populate cache
@@ -76,6 +81,7 @@ fn test_list_processes_cache_with_filtering_and_sorting() {
 
 #[test]
 fn test_list_processes_cache_ttl_invalidation() {
+    let _guard = SERIAL_MUTEX.lock().unwrap();
     invalidate_process_cache();
     let procs1 = list_processes(None, None, 0);
     assert!(!procs1.is_empty());
