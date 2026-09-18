@@ -1,0 +1,32 @@
+# at-pc-agent 终端配置文件 (v1.0.0)
+# 请将此配置文件与 at-pc-agent (或 at-pc-agent.exe) 放置在同一目录下
+
+[server]
+# 中心服务端 WebSocket 连接地址
+# 本地测试请保持 127.0.0.1，局域网/远程测试请改为服务端的内网或公网 IP，如 ws://192.168.1.100:9801/ws
+# 若服务端开启了 TLS，请使用 wss:// 协议，如 wss://127.0.0.1:9801/ws
+url = "ws://127.0.0.1:9801/ws"
+
+# 可选：连接鉴权 Token (若服务端配置了 --auth-token 则需保持一致，默认留空)
+# auth_token = "your-secret-token"
+
+# 断线自动重连间隔 (秒)
+reconnect_interval_secs = 5
+
+# TLS / WSS 安全连接配置 (可选)
+# insecure_skip_verify = false   # 若使用自签名证书测试，可设为 true 跳过证书校验
+# ca_cert_path = "server.crt"    # 自定义 CA 证书路径 (PEM 格式)
+# client_cert_path = "client.crt"# 双向认证 mTLS 客户端证书路径 (PEM 格式)
+# client_key_path = "client.key" # 双向认证 mTLS 客户端私钥路径 (PEM 格式)
+
+[device]
+# 终端唯一标识：默认为 "auto" (自动组合计算机名 + MAC 地址后缀保证唯一性)
+# 也可以手动指定固定标识，如 "finance-pc-01", "dev-pc-02"
+device_id = "auto"
+
+# 终端友好显示名称 (留空则自动读取计算机名)
+device_name = ""
+
+# 具身操作安全准入开关 (默认 false 禁用模拟鼠标键盘输入，设为 true 开启)
+# 亦可通过启动参数 --enable-computer-use 或环境变量 AT_PC_ENABLE_COMPUTER_USE=1 动态开启
+enable_computer_use = false
