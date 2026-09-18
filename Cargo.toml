@@ -37,6 +37,7 @@ rustls-pki-types = "1.7"
 axum-server = { version = "0.7", default-features = false, features = ["tls-rustls"] }
 rcgen = "0.13"
 webpki-roots = "0.26"
+same-file = "1.0"
 
 [profile.release]
 opt-level = 3

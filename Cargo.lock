@@ -367,6 +367,7 @@ dependencies = [
  "rustls",
  "rustls-pemfile",
  "rustls-pki-types",
+ "same-file",
  "serde",
  "serde_json",
  "tokio",

@@ -924,24 +924,15 @@ fn open_existing_snapshot_file(path: &Path) -> Result<Option<File>, String> {
 }
 
 fn same_open_file(left: &File, right: &File) -> bool {
-    let (Ok(left_meta), Ok(right_meta)) = (left.metadata(), right.metadata()) else {
+    let (Ok(f1), Ok(f2)) = (left.try_clone(), right.try_clone()) else {
         return false;
     };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        left_meta.dev() == right_meta.dev() && left_meta.ino() == right_meta.ino()
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        left_meta.volume_serial_number() == right_meta.volume_serial_number()
-            && left_meta.file_index() == right_meta.file_index()
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (left_meta, right_meta);
-        false
+    match (
+        same_file::Handle::from_file(f1),
+        same_file::Handle::from_file(f2),
+    ) {
+        (Ok(h1), Ok(h2)) => h1 == h2,
+        _ => false,
     }
 }
 

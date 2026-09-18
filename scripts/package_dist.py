@@ -240,6 +240,11 @@ def main(argv=None, *, run=None, base_dir=None, env=None):
         action="append",
         help="Rust target triple (repeatable). Omit to build the host triple.",
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Build and package all supported targets (aarch64-apple-darwin, x86_64-apple-darwin, x86_64-pc-windows-gnu).",
+    )
     args = parser.parse_args(argv)
 
     dist_dir = os.path.join(base_dir, "dist")
@@ -258,7 +263,15 @@ def main(argv=None, *, run=None, base_dir=None, env=None):
     extras = ["VERSION", *_copy_extras(base_dir, dist_dir)]
     artifacts = ["VERSION"]
 
-    if args.targets:
+    supported_all = [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-pc-windows-gnu",
+    ]
+
+    if args.all:
+        jobs = [(triple, True) for triple in supported_all]
+    elif args.targets:
         jobs = [(triple, True) for triple in args.targets]
     else:
         jobs = [(host_triple(run), False)]
@@ -277,6 +290,7 @@ def main(argv=None, *, run=None, base_dir=None, env=None):
             )
         )
 
+    artifacts = list(dict.fromkeys(artifacts))
     write_sha256sums(dist_dir, artifacts)
     print(f"=== at-pc v{version} Packaging Complete ===")
     for art in artifacts:

@@ -38,6 +38,18 @@ pub const IDLE_BACKOFF_THRESHOLD: u32 = 5;
 /// Frame interval when stream is in idle dynamic backoff (2 Hz = 500ms).
 pub const IDLE_FRAME_INTERVAL: Duration = Duration::from_millis(500);
 
+#[derive(Clone)]
+struct SendMonitor(Monitor);
+// SAFETY: On Windows, xcap::Monitor wraps HMONITOR (*mut c_void) which lacks Send by default,
+// but display monitor handles are process-wide identifiers safe to access across threads.
+unsafe impl Send for SendMonitor {}
+
+impl SendMonitor {
+    fn capture_image(&self) -> Result<xcap::image::RgbaImage, xcap::XCapError> {
+        self.0.capture_image()
+    }
+}
+
 /// Computes the effective loop interval given the active target interval and unchanged frame count.
 /// When `consecutive_unchanged >= IDLE_BACKOFF_THRESHOLD` (5), throttles to `IDLE_FRAME_INTERVAL` (500ms / 2 Hz).
 /// Otherwise returns `active_interval` (e.g. 66ms for 15 fps).
@@ -256,7 +268,7 @@ impl DesktopStreamController {
         );
 
         tokio::spawn(async move {
-            let mut cached_monitor = find_monitor(display_index);
+            let mut cached_monitor = find_monitor(display_index).map(SendMonitor);
             let mut state = StreamSendState {
                 last_hashes: Vec::new(),
                 last_width: 0,
@@ -270,9 +282,9 @@ impl DesktopStreamController {
 
                 // 1. Ensure monitor is available (cached). find_monitor stays on the async task.
                 if cached_monitor.is_none() {
-                    cached_monitor = find_monitor(display_index);
+                    cached_monitor = find_monitor(display_index).map(SendMonitor);
                 }
-                let Some(monitor) = cached_monitor.clone() else {
+                let Some(send_monitor) = cached_monitor.clone() else {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                     continue;
                 };
@@ -282,7 +294,7 @@ impl DesktopStreamController {
 
                 // 2-5. Capture + hash + convert + encode on a short blocking task (not the whole session)
                 let prepared = tokio::task::spawn_blocking(move || {
-                    let image = match monitor.capture_image() {
+                    let image = match send_monitor.capture_image() {
                         Ok(img) => img,
                         Err(e) => return PreparedFrame::CaptureError(e.to_string()),
                     };

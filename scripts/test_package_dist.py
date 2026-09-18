@@ -345,6 +345,46 @@ class PackageDistTests(unittest.TestCase):
             self.assertIn("at-pc-agent.exe", text)
             self.assertIn(str(base / "target" / "x86_64-pc-windows-msvc" / "release"), text)
 
+    def test_all_targets_flag_builds_and_packages_all_platforms(self):
+        with self._workspace() as name:
+            base = Path(name)
+            built = []
+            run = self._run_factory(base, built=built)
+            with redirect_stdout(io.StringIO()):
+                package_dist.main(
+                    ["--all"],
+                    run=run,
+                    base_dir=str(base),
+                    env={},
+                )
+            expected_targets = [
+                "aarch64-apple-darwin",
+                "x86_64-apple-darwin",
+                "x86_64-pc-windows-gnu",
+            ]
+            for triple in expected_targets:
+                self.assertIn(
+                    ("cargo", "build", "--release", "--target", triple),
+                    built,
+                )
+            dist = base / "dist"
+            self.assertTrue((dist / "at-pc-macos-arm64.zip").is_file())
+            self.assertTrue((dist / "at-pc-macos-x86_64.zip").is_file())
+            self.assertTrue((dist / "at-pc-windows-x86_64.zip").is_file())
+            self.assertTrue((dist / "at-pc-agent.exe").is_file())
+            self.assertTrue((dist / "at-pc-server.exe").is_file())
+            self.assertTrue((dist / "at-pc-agent-macos").is_file())
+            self.assertTrue((dist / "at-pc-server-macos").is_file())
+            sums_path = dist / "SHA256SUMS"
+            self.assertTrue(sums_path.is_file())
+            lines = [l for l in sums_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            filenames = [l.split()[1] for l in lines]
+            # Verify no duplicate entries in SHA256SUMS
+            self.assertEqual(len(filenames), len(set(filenames)))
+            self.assertIn("at-pc-macos-arm64.zip", filenames)
+            self.assertIn("at-pc-macos-x86_64.zip", filenames)
+            self.assertIn("at-pc-windows-x86_64.zip", filenames)
+
 
 if __name__ == "__main__":
     unittest.main()

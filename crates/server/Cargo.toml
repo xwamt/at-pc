@@ -30,6 +30,7 @@ tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 rustls-pki-types = { workspace = true }
 axum-server = { workspace = true }
+same-file = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
