@@ -270,7 +270,13 @@ def main(argv=None, *, run=None, base_dir=None, env=None):
     ]
 
     if args.all:
-        jobs = [(triple, True) for triple in supported_all]
+        host = host_triple(run)
+        ordered = [t for t in supported_all if t != host]
+        if host in supported_all:
+            ordered.append(host)
+        else:
+            ordered = supported_all
+        jobs = [(triple, True) for triple in ordered]
     elif args.targets:
         jobs = [(triple, True) for triple in args.targets]
     else:
