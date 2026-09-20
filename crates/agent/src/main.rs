@@ -116,6 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
         println!("        --service             Alias for --headless");
         println!("    --enable-computer-use     Enable simulated mouse and keyboard MCP tools");
+        println!("    --no-tray                 Run without system tray icon");
         println!("    --ca-cert <PATH>          Path to CA certificate for TLS/WSS verification");
         println!("    --client-cert <PATH>      Path to client certificate for mTLS");
         println!("    --client-key <PATH>       Path to client private key for mTLS");
@@ -143,6 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut cli_client_cert = None;
     let mut cli_client_key = None;
     let mut cli_insecure = false;
+    let mut no_tray = false;
 
     for i in 0..args.len() {
         if (args[i] == "--config" || args[i] == "-c") && i + 1 < args.len() {
@@ -156,6 +158,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         if args[i] == "--enable-computer-use" {
             cli_enable_cu = true;
+        }
+        if args[i] == "--no-tray" {
+            no_tray = true;
         }
         if args[i] == "--ca-cert" && i + 1 < args.len() {
             cli_ca_cert = Some(std::path::PathBuf::from(&args[i + 1]));
@@ -200,7 +205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     #[cfg(feature = "gui")]
     {
-        run_gui(config).await
+        run_gui(config, !no_tray).await
     }
 
     #[cfg(not(feature = "gui"))]
@@ -211,7 +216,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 #[cfg(feature = "gui")]
-async fn run_gui(config: AgentConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn run_gui(
+    config: AgentConfig,
+    enable_tray: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let terminal_info = config.to_terminal_info();
     let server_url = config.server.url.clone();
     let auth_token = config.server.auth_token.clone();
@@ -262,7 +270,7 @@ async fn run_gui(config: AgentConfig) -> Result<(), Box<dyn std::error::Error + 
     });
 
     // Keep native window creation on the main thread.
-    if let Err(e) = run_agent_app(state.clone()) {
+    if let Err(e) = run_agent_app(state.clone(), enable_tray) {
         tracing::error!("Agent GUI error: {}", e);
     }
 

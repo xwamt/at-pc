@@ -13,12 +13,29 @@ pub struct AgentApp {
     pub feedback_msg: Option<(String, bool)>,
     pub copied_id_timer: Option<Instant>,
     pub filter_failed_only: bool,
+    pub tray: Option<crate::app::tray::AgentTray>,
+    pub should_quit: bool,
 }
 
 impl AgentApp {
     /// Creates a new `AgentApp` instance.
-    pub fn new(state: Arc<AgentAppState>) -> Self {
+    pub fn new(state: Arc<AgentAppState>, enable_tray: bool) -> Self {
         let initial_url = state.server_url();
+        let tray = if enable_tray {
+            match crate::app::tray::AgentTray::new(
+                &state.get_terminal_info().terminal_id,
+                state.status(),
+            ) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::warn!("Failed to initialize agent system tray: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             state,
             server_url_input: initial_url,
@@ -26,6 +43,8 @@ impl AgentApp {
             feedback_msg: None,
             copied_id_timer: None,
             filter_failed_only: false,
+            tray,
+            should_quit: false,
         }
     }
 }
@@ -123,9 +142,62 @@ impl eframe::App for AgentApp {
         // Request repaint every 250ms for responsive status updates and audit logs
         ctx.request_repaint_after(Duration::from_millis(250));
 
+        let status = self.state.status();
+
+        // 0. Process Menu and Tray Events
+        while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
+            if let Some(ref tray) = self.tray {
+                if event.id == tray.show_window_id {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                } else if event.id == tray.copy_id_id {
+                    let full_id = self.state.get_terminal_info().terminal_id.clone();
+                    ctx.output_mut(|o| o.copied_text = full_id);
+                    self.copied_id_timer = Some(Instant::now());
+                    self.feedback_msg = Some(("终端 ID 已复制到剪贴板".to_string(), true));
+                } else if event.id == tray.toggle_conn_id {
+                    if status == ClientConnectionStatus::Connected && !self.state.is_stopped() {
+                        self.state.trigger_emergency_disconnect();
+                    } else {
+                        self.state.trigger_reconnect();
+                    }
+                } else if event.id == tray.quit_id {
+                    self.should_quit = true;
+                    self.state.trigger_emergency_disconnect();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+
+        while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+            match event {
+                tray_icon::TrayIconEvent::Click {
+                    button: tray_icon::MouseButton::Left,
+                    button_state: tray_icon::MouseButtonState::Up,
+                    ..
+                } => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                _ => {}
+            }
+        }
+
+        // Close-to-tray intercept
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if self.tray.is_some() && !self.should_quit {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+        }
+
+        // Update tray status text
+        if let Some(ref tray) = self.tray {
+            tray.update_status(&status);
+        }
+
         let terminal_info = self.state.get_terminal_info();
         let server_url = self.state.server_url();
-        let status = self.state.status();
         let is_stopped = self.state.is_stopped();
         let logs = self.state.get_audit_logs();
 
@@ -629,7 +701,7 @@ fn load_app_icon() -> Option<egui::IconData> {
 }
 
 /// Runs the native eframe desktop application for Agent.
-pub fn run_agent_app(state: Arc<AgentAppState>) -> eframe::Result<()> {
+pub fn run_agent_app(state: Arc<AgentAppState>, enable_tray: bool) -> eframe::Result<()> {
     let mut builder = egui::ViewportBuilder::default()
         .with_inner_size([500.0, 620.0])
         .with_min_inner_size([420.0, 460.0])
@@ -650,7 +722,7 @@ pub fn run_agent_app(state: Arc<AgentAppState>) -> eframe::Result<()> {
         Box::new(move |cc| {
             setup_custom_fonts(&cc.egui_ctx);
             setup_modern_theme(&cc.egui_ctx);
-            Box::new(AgentApp::new(state))
+            Box::new(AgentApp::new(state, enable_tray))
         }),
     )
 }

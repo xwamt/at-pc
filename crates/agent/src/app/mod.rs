@@ -1,8 +1,12 @@
 //! Agent desktop UI and application state module.
 
 #[cfg(feature = "gui")]
+pub mod tray;
+#[cfg(feature = "gui")]
 pub mod ui;
 
+#[cfg(feature = "gui")]
+pub use tray::AgentTray;
 #[cfg(feature = "gui")]
 pub use ui::{run_agent_app, setup_custom_fonts, AgentApp};
 
