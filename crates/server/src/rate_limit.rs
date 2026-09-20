@@ -166,3 +166,88 @@ impl AuthRateLimiter {
         RateLimitDecision::Allowed
     }
 }
+
+/// Result of checking request quota for an authenticated key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuotaResult {
+    pub allowed: bool,
+    pub limit: u32,
+    pub remaining: u32,
+    pub reset_secs: u64,
+}
+
+#[derive(Debug, Clone)]
+struct KeyQuotaEntry {
+    requests: Vec<Instant>,
+}
+
+/// Thread-safe rolling window per-key request quota tracker.
+#[derive(Debug)]
+pub struct KeyQuotaTracker {
+    limit: u32,
+    window: Duration,
+    entries: Mutex<HashMap<String, KeyQuotaEntry>>,
+}
+
+impl Default for KeyQuotaTracker {
+    fn default() -> Self {
+        Self::new(120, Duration::from_secs(60))
+    }
+}
+
+impl KeyQuotaTracker {
+    pub fn new(limit: u32, window: Duration) -> Self {
+        Self {
+            limit,
+            window,
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Checks and records a request for `key_id` at `Instant::now()`.
+    pub fn check_and_record(&self, key_id: &str) -> QuotaResult {
+        self.check_and_record_at(key_id, Instant::now())
+    }
+
+    /// Checks and records a request for `key_id` at a specific `Instant`.
+    pub fn check_and_record_at(&self, key_id: &str, now: Instant) -> QuotaResult {
+        let mut entries = match self.entries.lock() {
+            Ok(e) => e,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        let entry = entries.entry(key_id.to_string()).or_insert_with(|| KeyQuotaEntry {
+            requests: Vec::new(),
+        });
+
+        // Prune requests older than rolling window
+        entry.requests.retain(|&t| now.duration_since(t) <= self.window);
+
+        let current_count = entry.requests.len() as u32;
+        let oldest = entry.requests.first().copied().unwrap_or(now);
+        let elapsed = now.duration_since(oldest);
+        let reset_secs = if elapsed < self.window {
+            (self.window - elapsed).as_secs().max(1)
+        } else {
+            self.window.as_secs()
+        };
+
+        if current_count >= self.limit {
+            QuotaResult {
+                allowed: false,
+                limit: self.limit,
+                remaining: 0,
+                reset_secs,
+            }
+        } else {
+            entry.requests.push(now);
+            let remaining = self.limit.saturating_sub(current_count + 1);
+            QuotaResult {
+                allowed: true,
+                limit: self.limit,
+                remaining,
+                reset_secs,
+            }
+        }
+    }
+}

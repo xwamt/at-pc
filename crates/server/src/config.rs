@@ -245,6 +245,10 @@ pub fn is_loopback(host: &str) -> bool {
 pub enum BootGateError {
     /// Non-loopback listener without any credential configured.
     MissingCredentials { host: String },
+    /// Non-loopback listener without TLS and without explicit plaintext exemption.
+    TlsRequired { host: String },
+    /// Plaintext [roles] present in config when KeyStore is active.
+    PlaintextRolesNotAllowed,
 }
 
 impl std::fmt::Display for BootGateError {
@@ -260,34 +264,59 @@ impl std::fmt::Display for BootGateError {
                  \x20 3. Bind a loopback interface instead: --host 127.0.0.1 (local development)\n\
                  \x20 4. Explicitly opt out with --insecure-no-auth (NOT recommended: every endpoint is exposed)"
             ),
+            BootGateError::TlsRequired { host } => write!(
+                f,
+                "refusing to start: listening on non-loopback host '{host}' without TLS enabled.\n\
+                 Traffic across the network would be unencrypted.\n\
+                 Solutions:\n\
+                 \x20 1. Configure TLS via --tls-cert and --tls-key\n\
+                 \x20 2. Bind a loopback interface instead: --host 127.0.0.1\n\
+                 \x20 3. Explicitly allow unencrypted traffic with --allow-plaintext"
+            ),
+            BootGateError::PlaintextRolesNotAllowed => write!(
+                f,
+                "refusing to start: plaintext [roles] found in configuration while KeyStore is active.\n\
+                 Solutions:\n\
+                 \x20 1. Run with --migrate-legacy-credentials to migrate existing [roles]\n\
+                 \x20 2. Remove [roles] section from your server configuration file"
+            ),
         }
     }
 }
 
 impl std::error::Error for BootGateError {}
 
-/// Startup gate: a non-loopback listener must not boot without credentials.
-///
-/// The loopback exemption keeps the local development experience (`--host
-/// 127.0.0.1` + `--no-bootstrap` = open dev mode); anything reachable from the
-/// network requires either a credential or the explicit insecure opt-out.
+/// Startup gate: a non-loopback listener must not boot without credentials or without TLS (unless explicitly exempted).
 pub fn validate_boot_gate(
     cfg: &ServerConfig,
     has_creds: bool,
     insecure_no_auth: bool,
 ) -> Result<(), BootGateError> {
-    if insecure_no_auth {
-        return Ok(());
-    }
-    if has_creds {
-        return Ok(());
-    }
     if is_loopback(&cfg.listen_host) {
         return Ok(());
     }
-    Err(BootGateError::MissingCredentials {
-        host: cfg.listen_host.clone(),
-    })
+    if !has_creds && !insecure_no_auth {
+        return Err(BootGateError::MissingCredentials {
+            host: cfg.listen_host.clone(),
+        });
+    }
+    if !cfg.is_tls_enabled() && !cfg.allow_plaintext {
+        return Err(BootGateError::TlsRequired {
+            host: cfg.listen_host.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// Legacy config migration gate: reject plaintext [roles] once KeyStore has active keys.
+pub fn validate_legacy_config_gate(
+    cfg: &ServerConfig,
+    has_active_keys: bool,
+) -> Result<(), BootGateError> {
+    if has_active_keys && !cfg.roles.is_empty() {
+        return Err(BootGateError::PlaintextRolesNotAllowed);
+    }
+    Ok(())
 }
 
 /// Minimum Role required to access an HTTP endpoint (A7 / G1-3).

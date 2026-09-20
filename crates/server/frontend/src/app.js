@@ -1,4 +1,4 @@
-import { getAuthToken, restPaths, setAuthToken } from "./api/index.js";
+import { apiLogin, getAuthToken, restPaths, setAuthToken } from "./api/index.js";
 import {
   bindDesktopDocumentListeners,
   checkModifierCursor,
@@ -84,6 +84,11 @@ function promptAuth() {
   if (input) {
     input.value = getAuthToken();
   }
+  const authError = byId("authErrorMsg");
+  if (authError) {
+    authError.style.display = "none";
+    authError.textContent = "认证失败：API Key 无效或已过期";
+  }
   showAuthModal();
 }
 
@@ -91,18 +96,76 @@ export async function submitAuthToken() {
   const tokenEl = byId("authTokenInput");
   const token = tokenEl?.value?.trim();
   if (!token) return;
-  setAuthToken(token);
-  const res = await authFetch(restPaths.terminals());
-  if (res.ok) {
-    const authError = byId("authErrorMsg");
-    if (authError) authError.style.display = "none";
-    hideAuthModal();
-    terminalsState.terminalsData = await res.json();
-    renderCards();
-    refreshAdminAccess();
-  } else {
-    const authError = byId("authErrorMsg");
-    if (authError) authError.style.display = "block";
+
+  const authError = byId("authErrorMsg");
+  try {
+    const loginRes = await apiLogin(token);
+    if (loginRes.ok) {
+      if (authError) authError.style.display = "none";
+      setAuthToken(token);
+      const res = await authFetch(restPaths.terminals());
+      if (res.ok) {
+        hideAuthModal();
+        terminalsState.terminalsData = await res.json();
+        renderCards();
+        refreshAdminAccess();
+      } else {
+        if (authError) {
+          authError.textContent = "认证失败：API Key 无效或已过期";
+          authError.style.display = "block";
+        }
+      }
+      return;
+    }
+
+    if (loginRes.status === 429) {
+      let msg = "请求过于频繁，请稍后再试 (429)";
+      try {
+        const body = await loginRes.json();
+        if (body?.error) {
+          msg = `请求过于频繁：${body.error}`;
+        }
+      } catch {
+        // ignore
+      }
+      if (authError) {
+        authError.textContent = msg;
+        authError.style.display = "block";
+      }
+      return;
+    }
+
+    if (loginRes.status === 401) {
+      if (authError) {
+        authError.textContent = "认证失败：API Key 无效或已过期";
+        authError.style.display = "block";
+      }
+      return;
+    }
+
+    // Fallback for servers without /api/auth/login endpoint (404)
+    if (loginRes.status === 404) {
+      setAuthToken(token);
+      const res = await authFetch(restPaths.terminals());
+      if (res.ok) {
+        if (authError) authError.style.display = "none";
+        hideAuthModal();
+        terminalsState.terminalsData = await res.json();
+        renderCards();
+        refreshAdminAccess();
+        return;
+      }
+    }
+
+    if (authError) {
+      authError.textContent = "认证失败：API Key 无效或已过期";
+      authError.style.display = "block";
+    }
+  } catch {
+    if (authError) {
+      authError.textContent = "认证请求失败，请检查网络连接";
+      authError.style.display = "block";
+    }
   }
 }
 

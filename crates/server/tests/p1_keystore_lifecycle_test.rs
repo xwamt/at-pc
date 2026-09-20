@@ -82,6 +82,8 @@ async fn setup_test_context() -> TestContext {
         audit_logger: Some(audit_logger),
         keystore: Some(keystore),
         rate_limiter,
+        session_store: Arc::new(at_pc_server::session::SessionStore::default()),
+        quota_tracker: Arc::new(at_pc_server::rate_limit::KeyQuotaTracker::default()),
     };
 
     let cors = tower_http::cors::CorsLayer::new()
@@ -579,4 +581,108 @@ async fn test_g1_query_warning_header() {
         .expect("query auth must include Warning header");
     assert!(warning.contains("199"));
     assert!(warning.contains("deprecated"));
+}
+
+#[tokio::test]
+async fn test_m3_session_login_logout_and_quota() {
+    let ctx = setup_test_context().await;
+    let peer = peer_addr();
+
+    // 1. Quota headers present on authenticated request
+    let (status, headers, _, _) = send_request(
+        &ctx.app,
+        Method::GET,
+        "/api/auth/me",
+        Some(&ctx.admin_key),
+        None,
+        peer,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get("x-ratelimit-limit").unwrap(), "120");
+    assert!(headers.get("x-ratelimit-remaining").is_some());
+    assert!(headers.get("x-ratelimit-reset").is_some());
+
+    // 2. Login with bad key fails with 401
+    let mut req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&json!({ "key": "invalid_key" })).unwrap()))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(peer));
+    let resp = ctx.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 3. Login with valid admin key returns 200, role admin, and Set-Cookie with atpc_session
+    let mut req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&json!({ "key": ctx.admin_key })).unwrap()))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(peer));
+    let resp = ctx.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let cookie_header = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .expect("Set-Cookie header must be present")
+        .to_string();
+    assert!(cookie_header.contains("atpc_session=atpc_sess_"));
+    assert!(cookie_header.contains("HttpOnly"));
+    assert!(cookie_header.contains("SameSite=Strict"));
+
+    let body_bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body: Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["role"], "admin");
+
+    // Extract session token
+    let session_cookie = cookie_header.split(';').next().unwrap().trim();
+
+    // 4. Access authenticated endpoint using session cookie
+    let mut req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/auth/me")
+        .header(header::COOKIE, session_cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(peer));
+    let resp = ctx.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let me_bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let me_json: Value = serde_json::from_slice(&me_bytes).unwrap();
+    assert_eq!(me_json["id"], ctx.admin_id);
+    assert_eq!(me_json["role"], "admin");
+
+    // 5. Logout clears the cookie and revokes the session
+    let mut req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/logout")
+        .header(header::COOKIE, session_cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(peer));
+    let resp = ctx.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let logout_cookie = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .expect("Set-Cookie header must be present");
+    assert!(logout_cookie.contains("Max-Age=0"));
+
+    // 6. Old session cookie no longer valid
+    let mut req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/auth/me")
+        .header(header::COOKIE, session_cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(peer));
+    let resp = ctx.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }

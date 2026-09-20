@@ -40,21 +40,60 @@ fn test_boot_gate_allows_loopback_without_credentials() {
 }
 
 #[test]
-fn test_boot_gate_allows_non_loopback_with_credentials() {
+fn test_boot_gate_rejects_non_loopback_without_tls_unless_allow_plaintext() {
     let cfg = ServerConfig {
         listen_host: "0.0.0.0".to_string(),
+        allow_plaintext: false,
+        ..Default::default()
+    };
+    assert_eq!(
+        validate_boot_gate(&cfg, true, false),
+        Err(BootGateError::TlsRequired {
+            host: "0.0.0.0".to_string(),
+        })
+    );
+
+    let cfg_allowed = ServerConfig {
+        listen_host: "0.0.0.0".to_string(),
+        allow_plaintext: true,
+        ..Default::default()
+    };
+    assert_eq!(validate_boot_gate(&cfg_allowed, true, false), Ok(()));
+}
+
+#[test]
+fn test_boot_gate_allows_non_loopback_with_credentials_and_allow_plaintext() {
+    let cfg = ServerConfig {
+        listen_host: "0.0.0.0".to_string(),
+        allow_plaintext: true,
         ..Default::default()
     };
     assert_eq!(validate_boot_gate(&cfg, true, false), Ok(()));
 }
 
 #[test]
-fn test_boot_gate_allows_non_loopback_insecure_mode() {
+fn test_boot_gate_allows_non_loopback_insecure_mode_with_allow_plaintext() {
     let cfg = ServerConfig {
         listen_host: "0.0.0.0".to_string(),
+        allow_plaintext: true,
         ..Default::default()
     };
     assert_eq!(validate_boot_gate(&cfg, false, true), Ok(()));
+}
+
+#[test]
+fn test_legacy_config_gate_rejects_plaintext_roles_when_keystore_active() {
+    let mut cfg = ServerConfig::default();
+    cfg.roles.insert("secret".to_string(), at_pc_server::Role::Admin);
+
+    assert_eq!(
+        at_pc_server::config::validate_legacy_config_gate(&cfg, true),
+        Err(BootGateError::PlaintextRolesNotAllowed)
+    );
+    assert_eq!(
+        at_pc_server::config::validate_legacy_config_gate(&cfg, false),
+        Ok(())
+    );
 }
 
 #[test]

@@ -4,7 +4,7 @@
 //! Decoupled from static frontend assets using rust-embed.
 
 use axum::{
-    extract::{Extension, Path, Query, State},
+    extract::{ConnectInfo, Extension, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Json, Response},
     routing::{get, post},
@@ -14,11 +14,13 @@ use rust_embed::Embed;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::borrow::Cow;
+use std::net::SocketAddr;
 use std::path::{Component, Path as FilePath};
 
 use super::McpHttpState;
 use crate::config::Role;
 use crate::keystore::{KeyKind, KeySummary, Principal};
+use crate::rate_limit::RateLimitDecision;
 
 /// Embedded static frontend assets bundled directly into binary release artifact.
 /// Vite writes the production bundle to `frontend/dist/` so rust-embed packs
@@ -87,6 +89,8 @@ pub fn create_dashboard_router() -> Router<McpHttpState> {
         )
         .route("/calls", get(api_list_pending_calls))
         .route("/calls/:id/cancel", post(api_cancel_call))
+        .route("/auth/login", post(api_auth_login))
+        .route("/auth/logout", post(api_auth_logout))
         .route("/auth/me", get(api_auth_me))
         .route("/keys", get(api_list_keys).post(api_create_key))
         .route("/keys/:id", axum::routing::delete(api_revoke_key))
@@ -945,6 +949,159 @@ async fn api_export_audit_logs(
             ),
         ],
         bytes,
+    )
+        .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    pub key: String,
+}
+
+/// Handler for `POST /api/auth/login`
+async fn api_auth_login(
+    State(state): State<McpHttpState>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(body): Json<LoginRequest>,
+) -> Response {
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
+        })
+        .or_else(|| connect_info.map(|ci| ci.0.ip()))
+        .unwrap_or_else(|| std::net::IpAddr::from([127, 0, 0, 1]));
+
+    match state.rate_limiter.check(client_ip) {
+        RateLimitDecision::RateLimited { retry_after_secs }
+        | RateLimitDecision::Banned { retry_after_secs } => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, retry_after_secs.to_string())],
+                Json(json!({ "error": "Too Many Requests: Rate limit exceeded" })),
+            )
+                .into_response();
+        }
+        RateLimitDecision::Allowed => {}
+    }
+
+    let verified: Option<(Principal, Role)> = if let Some(ref ks) = state.keystore {
+        match ks.verify(&body.key) {
+            Ok(principal) => {
+                if principal.kind != KeyKind::DeviceToken {
+                    let role = principal.role.unwrap_or(Role::Viewer);
+                    Some((principal, role))
+                } else {
+                    None
+                }
+            }
+            Err(crate::keystore::AuthError::KeyNotFound)
+            | Err(crate::keystore::AuthError::InvalidFormat) => {
+                let has_legacy_creds = state.config.has_credentials();
+                let open_dev = !has_legacy_creds && !ks.has_active_keys();
+                if has_legacy_creds || open_dev {
+                    state.config.get_role_for_token(&body.key).map(|role| {
+                        let principal = Principal {
+                            id: "legacy".to_string(),
+                            name: "legacy".to_string(),
+                            kind: KeyKind::SecretKey,
+                            role: Some(role),
+                            scopes: vec!["*".to_string()],
+                            device_id: None,
+                        };
+                        (principal, role)
+                    })
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    } else {
+        state.config.get_role_for_token(&body.key).map(|role| {
+            let principal = Principal {
+                id: "legacy".to_string(),
+                name: "legacy".to_string(),
+                kind: KeyKind::SecretKey,
+                role: Some(role),
+                scopes: vec!["*".to_string()],
+                device_id: None,
+            };
+            (principal, role)
+        })
+    };
+
+    let (principal, role) = match verified {
+        Some((p, r)) => {
+            state.rate_limiter.record_success(client_ip);
+            (p, r)
+        }
+        None => {
+            state.rate_limiter.record_failure(client_ip);
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Invalid API key" })),
+            )
+                .into_response();
+        }
+    };
+
+    let is_tls = (state.config.tls_cert_path.is_some() && state.config.tls_key_path.is_some())
+        || headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.eq_ignore_ascii_case("https"))
+            .unwrap_or(false);
+
+    let token = state.session_store.create_session(principal);
+    let cookie = format!(
+        "atpc_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400{}",
+        if is_tls { "; Secure" } else { "" }
+    );
+
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, cookie)],
+        Json(json!({ "status": "ok", "role": role.to_string() })),
+    )
+        .into_response()
+}
+
+/// Handler for `POST /api/auth/logout`
+async fn api_auth_logout(
+    State(state): State<McpHttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(cookie_header) = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+    {
+        for pair in cookie_header.split(';') {
+            if let Some((k, v)) = pair.trim().split_once('=') {
+                if k.eq_ignore_ascii_case("atpc_session") {
+                    let token = v.trim();
+                    if !token.is_empty() {
+                        state.session_store.revoke_session(token);
+                    }
+                }
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        [(
+            header::SET_COOKIE,
+            "atpc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+        )],
+        Json(json!({ "status": "ok" })),
     )
         .into_response()
 }

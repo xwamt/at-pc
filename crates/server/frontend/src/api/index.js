@@ -79,10 +79,35 @@ export const restPaths = {
   desktopFrameRaw: (id) => `/api/terminals/${encodeURIComponent(id)}/desktop/frame.jpg`,
   desktopInput: (id) => `/api/terminals/${encodeURIComponent(id)}/desktop/input`,
   authMe: () => "/api/auth/me",
+  login: () => "/api/auth/login",
+  logout: () => "/api/auth/logout",
   keys: () => "/api/keys",
   key: (id) => `/api/keys/${encodeURIComponent(id)}`,
   rotateKey: (id) => `/api/keys/${encodeURIComponent(id)}/rotate`,
 };
+
+/**
+ * @param {string} key
+ * @param {typeof fetch} [fetchImpl]
+ */
+export async function apiLogin(key, fetchImpl = globalThis.fetch.bind(globalThis)) {
+  return fetchImpl(restPaths.login(), {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+}
+
+/**
+ * @param {typeof fetch} [fetchImpl]
+ */
+export async function apiLogout(fetchImpl = globalThis.fetch.bind(globalThis)) {
+  return fetchImpl(restPaths.logout(), {
+    method: "POST",
+    credentials: "same-origin",
+  });
+}
 
 /**
  * @param {string} url
@@ -92,7 +117,11 @@ export const restPaths = {
 export async function authFetch(url, options = {}, deps = {}) {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const getToken = deps.getToken ?? getAuthToken;
-  const request = { ...options, headers: options.headers || {} };
+  const request = {
+    ...options,
+    credentials: options.credentials ?? "same-origin",
+    headers: options.headers || {},
+  };
   applyAuthHeader(request.headers, getToken());
   const res = await fetchImpl(url, request);
   if (res.status === 401) {

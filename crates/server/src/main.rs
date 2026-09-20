@@ -51,6 +51,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!(
             "    --insecure-no-auth    Opt out of authentication gate (allow non-loopback without credentials)"
         );
+        println!(
+            "    --allow-plaintext     Allow non-loopback listener without TLS (traffic is unencrypted)"
+        );
+        println!(
+            "    --migrate-legacy-credentials  Migrate legacy [roles] and auth_token into KeyStore"
+        );
         println!("    --stdio               Run MCP server in stdio mode (for local IDE / Cursor)");
         println!("    --no-tray             Run without system tray icon in console mode");
         println!("    -h, --help            Print help information");
@@ -215,6 +221,78 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
+    if raw_args.iter().any(|a| a == "--allow-plaintext")
+        || std::env::var("AT_PC_ALLOW_PLAINTEXT").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+    {
+        config.allow_plaintext = true;
+    }
+
+    let migrate_legacy = raw_args.iter().any(|a| a == "--migrate-legacy-credentials");
+    if migrate_legacy {
+        let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
+            config::default_data_dir().join("keys.json")
+        });
+        let keystore = match at_pc_server::keystore::KeyStore::load_or_create(&keys_file) {
+            Ok(ks) => ks,
+            Err(e) => {
+                eprintln!("Failed to load keystore at {}: {e}", keys_file.display());
+                std::process::exit(1);
+            }
+        };
+        println!("============================================================");
+        println!("Migrating legacy credentials into KeyStore ({})", keys_file.display());
+        println!("============================================================");
+        let mut count = 0;
+        for (_token, role) in &config.roles {
+            match keystore.issue(
+                format!("migrated-{}", role.to_string().to_ascii_lowercase()),
+                at_pc_server::keystore::KeyKind::SecretKey,
+                Some(*role),
+                vec!["*".to_string()],
+                None,
+                None,
+            ) {
+                Ok((rec, plaintext)) => {
+                    println!("Migrated credential for role '{}':", role);
+                    println!("  ID        : {}", rec.id);
+                    println!("  Key       : {}", plaintext);
+                    println!("  Role      : {}", role);
+                    count += 1;
+                }
+                Err(e) => {
+                    eprintln!("  Failed to migrate credential for role '{}': {e}", role);
+                }
+            }
+        }
+        if let Some(ref primary) = config.auth_token {
+            if !primary.is_empty() {
+                match keystore.issue(
+                    "migrated-agent".to_string(),
+                    at_pc_server::keystore::KeyKind::DeviceToken,
+                    None,
+                    vec!["terminal".to_string()],
+                    None,
+                    None,
+                ) {
+                    Ok((rec, plaintext)) => {
+                        println!("Migrated legacy auth_token to Device Token:");
+                        println!("  ID        : {}", rec.id);
+                        println!("  Token     : {}", plaintext);
+                        count += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("  Failed to migrate auth_token: {e}");
+                    }
+                }
+            }
+        }
+        println!("============================================================");
+        println!("Migration complete: {count} credential(s) migrated to KeyStore.");
+        println!("Important: Please remove [roles] and auth_token from your config file.");
+        println!("============================================================");
+        std::process::exit(0);
+    }
+
     let args = Args {
         no_bootstrap: raw_args.iter().any(|a| a == "--no-bootstrap"),
         insecure_no_auth: raw_args.iter().any(|a| a == "--insecure-no-auth"),
@@ -248,6 +326,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let has_keystore_keys = keystore.as_ref().map(|k| k.has_active_keys()).unwrap_or(false);
     let has_creds = config.has_credentials() || has_keystore_keys;
 
+    if let Err(e) = config::validate_legacy_config_gate(&config, has_keystore_keys) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+
     if let Err(e) = config::validate_boot_gate(
         &config,
         has_creds,
@@ -259,6 +342,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if config.insecure_no_auth {
         tracing::warn!("--insecure-no-auth is active: server is running in unauthenticated mode!");
+    }
+    if config.allow_plaintext && !config::is_loopback(&config.listen_host) {
+        eprintln!(
+            "WARNING: Running on non-loopback interface '{}' without TLS (--allow-plaintext active)! Traffic is unencrypted.",
+            config.listen_host
+        );
     }
 
     #[cfg(feature = "tray")]
@@ -382,6 +471,26 @@ async fn run_server_pipeline(
         .audit_log_path
         .clone()
         .map(|p| Arc::new(at_pc_server::audit::AuditLogger::new(Some(p))));
+
+    if config.allow_plaintext && !at_pc_server::config::is_loopback(&config.listen_host) {
+        if let Some(ref al) = audit_logger {
+            al.log(at_pc_server::audit::AuditRecord {
+                id: format!("audit-{}", at_pc_server::router::generate_call_id()),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                role: None,
+                token_prefix: None,
+                client_ip: None,
+                terminal_id: None,
+                action: at_pc_server::audit::ACTION_INSECURE_MODE.to_string(),
+                tool_name: None,
+                arguments: None,
+                status: "WARN".to_string(),
+                error: Some("Running on non-loopback without TLS (--allow-plaintext)".to_string()),
+                duration_ms: Some(0),
+            });
+        }
+    }
+
     let mut mcp_router = McpRouter::new(registry.clone());
     if let Some(ref al) = audit_logger {
         mcp_router = mcp_router.with_audit_logger(al.clone());

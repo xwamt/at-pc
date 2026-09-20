@@ -39,6 +39,10 @@ pub struct McpHttpState {
     pub keystore: Option<Arc<KeyStore>>,
     /// Rate limiter tracking authentication failures per IP address.
     pub rate_limiter: Arc<AuthRateLimiter>,
+    /// HttpOnly session store for authenticated browser console access.
+    pub session_store: Arc<crate::session::SessionStore>,
+    /// Per-key request quota tracker.
+    pub quota_tracker: Arc<crate::rate_limit::KeyQuotaTracker>,
 }
 
 /// Returns the server log path used by both the tracing writer and dashboard tail endpoint.
@@ -126,6 +130,8 @@ pub fn create_mcp_http_router(router: Arc<McpRouter>, config: ServerConfig) -> R
     });
     let keystore = KeyStore::load_or_create(&keys_file).ok().map(Arc::new);
     let rate_limiter = Arc::new(AuthRateLimiter::default());
+    let session_store = Arc::new(crate::session::SessionStore::default());
+    let quota_tracker = Arc::new(crate::rate_limit::KeyQuotaTracker::default());
 
     let state = McpHttpState {
         router,
@@ -134,6 +140,8 @@ pub fn create_mcp_http_router(router: Arc<McpRouter>, config: ServerConfig) -> R
         audit_logger,
         keystore,
         rate_limiter,
+        session_store,
+        quota_tracker,
     };
 
     create_mcp_http_router_with_state(state, cors)
@@ -163,6 +171,9 @@ pub fn create_mcp_http_router_with_state(state: McpHttpState, cors: CorsLayer) -
 /// - `GET /health` from loopback peers, so container HEALTHCHECKs keep
 ///   working without credentials; `health_handler` minimizes the payload there
 fn is_auth_exempt(path: &str, method: &Method, peer_loopback: bool) -> bool {
+    if path == "/api/auth/login" && *method == axum::http::Method::POST {
+        return true;
+    }
     if *method == Method::OPTIONS {
         return true;
     }
@@ -221,7 +232,15 @@ pub async fn auth_layer(
     let mut principal_opt: Option<Principal> = None;
 
     if let Some(ref token) = token_opt {
-        if let Some(ref ks) = state.keystore {
+        if token.starts_with("atpc_sess_") {
+            if let Some(principal) = state.session_store.validate_session(token) {
+                resolved_role = principal.role;
+                principal_opt = Some(principal);
+            }
+        }
+
+        if resolved_role.is_none() {
+            if let Some(ref ks) = state.keystore {
             match ks.verify(token) {
                 Ok(principal) => {
                     // Check kind: dv token cannot be used for client HTTP/dashboard
@@ -280,6 +299,7 @@ pub async fn auth_layer(
             }
         }
     }
+}
 
     if resolved_role.is_none() {
         if state.config.insecure_no_auth {
@@ -338,6 +358,34 @@ pub async fn auth_layer(
         }
     }
 
+    let key_id = principal_opt
+        .as_ref()
+        .map(|p| p.id.as_str())
+        .unwrap_or("legacy");
+    let quota = state.quota_tracker.check_and_record(key_id);
+    if !quota.allowed {
+        let mut response = (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "Too Many Requests: Request quota exceeded" })),
+        )
+            .into_response();
+        let headers = response.headers_mut();
+        if let Ok(v) = quota.reset_secs.to_string().parse() {
+            headers.insert(axum::http::header::RETRY_AFTER, v);
+        }
+        if let Ok(v) = quota.limit.to_string().parse() {
+            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
+        }
+        headers.insert(
+            axum::http::HeaderName::from_static("x-ratelimit-remaining"),
+            axum::http::HeaderValue::from_static("0"),
+        );
+        if let Ok(v) = quota.reset_secs.to_string().parse() {
+            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
+        }
+        return response;
+    }
+
     req.extensions_mut().insert(role);
     if let Some(t) = token_opt {
         req.extensions_mut().insert(t);
@@ -353,6 +401,17 @@ pub async fn auth_layer(
             axum::http::header::WARNING,
             axum::http::HeaderValue::from_static("199 - \"API key in query parameters is deprecated and insecure\""),
         );
+    }
+
+    let headers = response.headers_mut();
+    if let Ok(v) = quota.limit.to_string().parse() {
+        headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
+    }
+    if let Ok(v) = quota.remaining.to_string().parse() {
+        headers.insert(axum::http::HeaderName::from_static("x-ratelimit-remaining"), v);
+    }
+    if let Ok(v) = quota.reset_secs.to_string().parse() {
+        headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
     }
 
     response
@@ -426,14 +485,17 @@ pub fn extract_credential(
         }
     }
 
-    // 2. Check Cookie: token=<token> or Cookie: auth_token=<token>
+    // 2. Check Cookie: atpc_session=<token> or token=<token> or auth_token=<token>
     if let Some(cookie_header) = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
     {
         for pair in cookie_header.split(';') {
             if let Some((k, v)) = pair.trim().split_once('=') {
-                if k.eq_ignore_ascii_case("token") || k.eq_ignore_ascii_case("auth_token") {
+                if k.eq_ignore_ascii_case("atpc_session")
+                    || k.eq_ignore_ascii_case("token")
+                    || k.eq_ignore_ascii_case("auth_token")
+                {
                     let val = v.trim();
                     if !val.is_empty() {
                         return (Some(val.to_string()), Some(CredentialSource::Cookie));
