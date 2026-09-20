@@ -151,6 +151,71 @@ impl ServerTray {
     }
 }
 
+/// Custom user events for waking up the winit event loop from tray / menu callbacks.
+#[derive(Debug)]
+pub enum ServerAppEvent {
+    Menu(muda::MenuEvent),
+    Tray(tray_icon::TrayIconEvent),
+    ShutdownCompleted,
+}
+
+/// Runs the native system tray event loop on the main thread.
+pub fn run_tray_event_loop(
+    tray: ServerTray,
+    web_port: u16,
+    log_file_path: std::path::PathBuf,
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    completion_proxy: winit::event_loop::EventLoopProxy<ServerAppEvent>,
+    event_loop: winit::event_loop::EventLoop<ServerAppEvent>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let proxy = std::sync::Arc::new(std::sync::Mutex::new(completion_proxy));
+
+    let proxy_menu = proxy.clone();
+    muda::MenuEvent::set_event_handler(Some(Box::new(move |event| {
+        if let Ok(p) = proxy_menu.lock() {
+            let _ = p.send_event(ServerAppEvent::Menu(event));
+        }
+    })));
+
+    let proxy_tray = proxy.clone();
+    tray_icon::TrayIconEvent::set_event_handler(Some(Box::new(move |event| {
+        if let Ok(p) = proxy_tray.lock() {
+            let _ = p.send_event(ServerAppEvent::Tray(event));
+        }
+    })));
+
+    let mut is_shutting_down = false;
+    let _tray_keeper = tray;
+
+    event_loop.run(move |event, target| {
+        target.set_control_flow(winit::event_loop::ControlFlow::Wait);
+
+        match event {
+            winit::event::Event::UserEvent(ServerAppEvent::ShutdownCompleted) => {
+                info!("Server shutdown completed cleanly. Exiting event loop.");
+                target.exit();
+            }
+            winit::event::Event::UserEvent(ServerAppEvent::Menu(menu_event)) => {
+                if menu_event.id == _tray_keeper.open_web_id {
+                    let url = format!("http://127.0.0.1:{}", web_port);
+                    open_browser_url(&url);
+                } else if menu_event.id == _tray_keeper.open_logs_id {
+                    locate_file_in_explorer(&log_file_path);
+                } else if menu_event.id == _tray_keeper.quit_id {
+                    if !is_shutting_down {
+                        is_shutting_down = true;
+                        info!("Quit requested from system tray. Initiating graceful shutdown...");
+                        let _ = shutdown_tx.send(());
+                    }
+                }
+            }
+            _ => {}
+        }
+    })?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

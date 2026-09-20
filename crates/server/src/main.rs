@@ -11,8 +11,7 @@ use at_pc_server::{
     start_mcp_http_server_with_shutdown,
 };
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args: Vec<String> = std::env::args().collect();
 
     // Check for help flag
@@ -33,6 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("    --tls-ca <PATH>       Path to client CA certificate for mTLS");
         println!("    --audit-file <PATH>   Path to JSONL audit log file (default: audit.jsonl)");
         println!("    --stdio               Run MCP server in stdio mode (for local IDE / Cursor)");
+        println!("    --no-tray             Run without system tray icon in console mode");
         println!("    -h, --help            Print help information");
         return Ok(());
     }
@@ -143,6 +143,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
+    let enable_tray = at_pc_server::tray::should_enable_tray(&args);
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    if enable_tray {
+        let (shutdown_broadcast_tx, shutdown_broadcast_rx) = tokio::sync::broadcast::channel::<()>(1);
+        let mut builder = winit::event_loop::EventLoopBuilder::<at_pc_server::tray::ServerAppEvent>::with_user_event();
+        #[cfg(target_os = "macos")]
+        {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            builder.with_activation_policy(ActivationPolicy::Accessory);
+        }
+
+        match builder.build() {
+            Ok(event_loop) => {
+                match at_pc_server::tray::ServerTray::new(config.mcp_port, config.ws_port) {
+                    Ok(tray) => {
+                        let proxy = event_loop.create_proxy();
+                        let completion_proxy = proxy.clone();
+                        let server_config = config.clone();
+
+                        rt.spawn(async move {
+                            if let Err(e) = run_server_pipeline(
+                                server_config,
+                                stdio_mode,
+                                Some(shutdown_broadcast_rx),
+                                Some(completion_proxy),
+                            )
+                            .await
+                            {
+                                error!("Server error: {}", e);
+                            }
+                        });
+
+                        at_pc_server::tray::run_tray_event_loop(
+                            tray,
+                            config.mcp_port,
+                            log_file_path,
+                            shutdown_broadcast_tx,
+                            proxy,
+                            event_loop,
+                        )
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize server tray ({e}); falling back to console mode");
+                        rt.block_on(run_server_pipeline(config, stdio_mode, None, None))
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to create event loop for tray ({e}); falling back to console mode");
+                rt.block_on(run_server_pipeline(config, stdio_mode, None, None))
+            }
+        }
+    } else {
+        rt.block_on(run_server_pipeline(config, stdio_mode, None, None))
+    }
+}
+
+async fn run_server_pipeline(
+    config: ServerConfig,
+    stdio_mode: bool,
+    shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
+    completion_proxy: Option<winit::event_loop::EventLoopProxy<at_pc_server::tray::ServerAppEvent>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Starting at-pc-server v{}", env!("CARGO_PKG_VERSION"));
     info!(
         "Listen host: {}, WebSocket port: {}, MCP port: {}",
@@ -193,6 +260,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // 5. Run MCP gateway until transport completion or signal, then stop producers before
     // flushing the persistence writers.
+    let shutdown_future = async move {
+        if let Some(mut rx) = shutdown_rx {
+            tokio::select! {
+                () = shutdown_signal() => {},
+                _ = rx.recv() => {},
+            }
+        } else {
+            shutdown_signal().await;
+        }
+    };
+
     let mut background_http = None;
     let gateway_result = if stdio_mode {
         let http_router = router.clone();
@@ -210,7 +288,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             () = shutdown_signal() => Ok(()),
         }
     } else {
-        start_mcp_http_server_with_shutdown(router.clone(), config, shutdown_signal()).await
+        start_mcp_http_server_with_shutdown(router.clone(), config, shutdown_future).await
     };
 
     let mut handles = vec![ws_handle, sweep_handle];
@@ -221,6 +299,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if let Err(error) = shutdown_persistence(&meta_store, audit_logger.as_deref()).await {
         error!(%error, "failed to durably shut down persistence writers");
+    }
+
+    if let Some(proxy) = completion_proxy {
+        let _ = proxy.send_event(at_pc_server::tray::ServerAppEvent::ShutdownCompleted);
     }
 
     gateway_result
