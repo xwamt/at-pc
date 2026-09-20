@@ -10,6 +10,10 @@ workspace = true
 [build-dependencies]
 at-pc-build-support = { workspace = true }
 
+[features]
+default = ["tray"]
+tray = ["dep:tray-icon", "dep:muda", "dep:winit", "dep:image"]
+
 [dependencies]
 at-pc-protocol = { workspace = true }
 tokio = { workspace = true }
@@ -31,10 +35,10 @@ rustls-pemfile = { workspace = true }
 rustls-pki-types = { workspace = true }
 axum-server = { workspace = true }
 same-file = { workspace = true }
-tray-icon = { workspace = true }
-muda = { workspace = true }
-winit = { workspace = true }
-image = { workspace = true }
+tray-icon = { workspace = true, optional = true }
+muda = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -290,7 +290,8 @@ impl AgentWsClient {
                 format!("{}:9801", host)
             };
 
-            let connect_fut = tokio::time::timeout(connect_timeout, TcpStream::connect(&connect_addr));
+            let connect_fut =
+                tokio::time::timeout(connect_timeout, TcpStream::connect(&connect_addr));
             let tcp_result = tokio::select! {
                 res = connect_fut => Some(res),
                 _ = self.reconnect_notify.notified() => {
@@ -327,7 +328,9 @@ impl AgentWsClient {
                                                 )),
                                             }
                                         }
-                                        Err(e) => Err(format!("Failed to build TLS connector: {}", e)),
+                                        Err(e) => {
+                                            Err(format!("Failed to build TLS connector: {}", e))
+                                        }
                                     }
                                 }
                                 Err(e) => Err(format!(

@@ -104,7 +104,10 @@ pub struct ServerTray {
 }
 
 impl ServerTray {
-    pub fn new(web_port: u16, ws_port: u16) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(
+        web_port: u16,
+        ws_port: u16,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let menu = Menu::new();
         let title_item = MenuItem::with_id(
             "title",
@@ -201,12 +204,10 @@ pub fn run_tray_event_loop(
                     open_browser_url(&url);
                 } else if menu_event.id == _tray_keeper.open_logs_id {
                     locate_file_in_explorer(&log_file_path);
-                } else if menu_event.id == _tray_keeper.quit_id {
-                    if !is_shutting_down {
-                        is_shutting_down = true;
-                        info!("Quit requested from system tray. Initiating graceful shutdown...");
-                        let _ = shutdown_tx.send(());
-                    }
+                } else if menu_event.id == _tray_keeper.quit_id && !is_shutting_down {
+                    is_shutting_down = true;
+                    info!("Quit requested from system tray. Initiating graceful shutdown...");
+                    let _ = shutdown_tx.send(());
                 }
             }
             _ => {}
@@ -223,7 +224,10 @@ mod tests {
     #[test]
     fn test_load_tray_icon_succeeds() {
         let icon_res = load_tray_icon();
-        assert!(icon_res.is_ok(), "Tray icon must load cleanly from media/at-pc-icon.png");
+        assert!(
+            icon_res.is_ok(),
+            "Tray icon must load cleanly from media/at-pc-icon.png"
+        );
     }
 
     #[test]
@@ -241,9 +245,19 @@ mod tests {
 
     #[test]
     fn test_should_enable_tray_logic() {
-        assert!(!should_enable_tray(&["at-pc-server".into(), "--stdio".into()]));
-        assert!(!should_enable_tray(&["at-pc-server".into(), "--no-tray".into()]));
+        assert!(!should_enable_tray(&[
+            "at-pc-server".into(),
+            "--stdio".into()
+        ]));
+        assert!(!should_enable_tray(&[
+            "at-pc-server".into(),
+            "--no-tray".into()
+        ]));
         assert!(should_enable_tray(&["at-pc-server".into()]));
-        assert!(should_enable_tray(&["at-pc-server".into(), "--host".into(), "127.0.0.1".into()]));
+        assert!(should_enable_tray(&[
+            "at-pc-server".into(),
+            "--host".into(),
+            "127.0.0.1".into()
+        ]));
     }
 }

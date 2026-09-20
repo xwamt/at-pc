@@ -1,0 +1,24 @@
+[Unit]
+Description=AT-PC Central Gateway & Remote PC Control Service
+Documentation=https://github.com/xwamt/at-pc
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/lib/at-pc
+ExecStart=/usr/local/bin/at-pc-server --host 0.0.0.0 --ws-port 9801 --mcp-port 9800 --config /etc/at-pc/server_config.toml --meta-file /var/lib/at-pc/terminals_meta.json --audit-file /var/log/at-pc/audit.jsonl --log-file /var/log/at-pc/at-pc-server.log
+Restart=always
+RestartSec=5s
+LimitNOFILE=65536
+KillMode=control-group
+TimeoutStopSec=15s
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

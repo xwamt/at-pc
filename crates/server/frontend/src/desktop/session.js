@@ -512,6 +512,10 @@ export function setupRemoteDesktopInteractions(terminalId) {
     while (desktopState.currentStreamTid === tid) {
       try {
         const res = await authFetch(restPaths.desktopFrameRaw(tid));
+        if (res.status === 204) {
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          continue;
+        }
         if (res.ok) {
           const tsHeader = res.headers.get("X-Frame-Timestamp");
           const timestamp = tsHeader ? parseInt(tsHeader, 10) : 0;

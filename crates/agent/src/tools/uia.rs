@@ -334,7 +334,7 @@ mod win_uia {
 
     unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let state = &mut *(lparam.0 as *mut WindowSearchState);
-        if !IsWindowVisible(hwnd).as_bool() {
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
             return BOOL(1);
         }
 
@@ -344,7 +344,7 @@ mod win_uia {
             let _ = GetWindowRect(hwnd, &mut r);
             let width = r.right - r.left;
             let height = r.bottom - r.top;
-            if width > 0 && height > 0 {
+            if width > 0 && height > 0 && r.left > -10000 && r.top > -10000 {
                 if title.to_lowercase().contains(&state.target_title) {
                     state.found_hwnd = Some(hwnd);
                     state.found_title = title;
@@ -384,6 +384,8 @@ mod win_uia {
         window_title: Option<&str>,
         query: Option<&str>,
         compact: Option<bool>,
+        pid: Option<u32>,
+        hwnd: Option<usize>,
     ) -> Result<UiTreeResponse, String> {
         let max_depth = depth.unwrap_or(5).clamp(1, 15);
 
@@ -393,31 +395,106 @@ mod win_uia {
                 CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
                     .map_err(|e| format!("Failed to create IUIAutomation instance: {}", e))?;
 
-            let title_filter_trimmed = window_title.map(|s| s.trim()).filter(|s| !s.is_empty());
-            let (target_hwnd, active_window, window_bounds) =
-                if let Some(title_filter) = title_filter_trimmed {
-                    let trimmed = title_filter.to_lowercase();
-                    let mut state = WindowSearchState {
-                        target_title: trimmed,
-                        found_hwnd: None,
-                        found_title: String::new(),
-                        found_rect: [0, 0, 0, 0],
-                    };
-                    let _ = EnumWindows(
-                        Some(enum_windows_proc),
-                        LPARAM(&mut state as *mut _ as isize),
-                    );
-                    if let Some(hwnd) = state.found_hwnd {
-                        (hwnd, state.found_title, state.found_rect)
-                    } else {
-                        return Err(format!(
-                            "No window matching title '{}' was found",
-                            title_filter
-                        ));
+            let (target_hwnd, active_window, window_bounds) = if let Some(h) = hwnd {
+                let target = HWND(h as isize);
+                if !IsWindow(target).as_bool() {
+                    return Err(format!("Invalid window handle {}", h));
+                }
+                if IsIconic(target).as_bool() {
+                    return Err(format!("Window handle {} is minimized or off-screen", h));
+                }
+                let mut r = RECT::default();
+                let _ = GetWindowRect(target, &mut r);
+                if r.left <= -10000 || r.top <= -10000 {
+                    return Err(format!("Window handle {} is minimized or off-screen", h));
+                }
+                let title = get_window_title_safe(target);
+                let bounds = [
+                    r.left,
+                    r.top,
+                    (r.right - r.left).max(0),
+                    (r.bottom - r.top).max(0),
+                ];
+                (target, title, bounds)
+            } else if let Some(target_pid) = pid {
+                struct PidSearchState {
+                    target_pid: u32,
+                    target_title: Option<String>,
+                    fg_hwnd: HWND,
+                    found_hwnd: Option<HWND>,
+                    found_title: String,
+                    found_rect: [i32; 4],
+                }
+                unsafe extern "system" fn enum_pid_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+                    let state = &mut *(lparam.0 as *mut PidSearchState);
+                    if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+                        return BOOL(1);
                     }
-                } else {
-                    get_foreground_window_info()?
+                    let mut p = 0;
+                    let _ = GetWindowThreadProcessId(hwnd, Some(&mut p));
+                    if p == state.target_pid {
+                        let title = get_window_title_safe(hwnd);
+                        let mut r = RECT::default();
+                        let _ = GetWindowRect(hwnd, &mut r);
+                        let width = r.right - r.left;
+                        let height = r.bottom - r.top;
+                        if width > 0 && height > 0 && r.left > -10000 && r.top > -10000 {
+                            if let Some(ref filter) = state.target_title {
+                                if !title.to_lowercase().contains(filter) {
+                                    return BOOL(1);
+                                }
+                            }
+                            let is_fg = hwnd == state.fg_hwnd;
+                            state.found_hwnd = Some(hwnd);
+                            state.found_title = title;
+                            state.found_rect = [r.left, r.top, width, height];
+                            if is_fg || state.target_title.is_some() {
+                                return BOOL(0);
+                            }
+                        }
+                    }
+                    BOOL(1)
+                }
+                let mut state = PidSearchState {
+                    target_pid,
+                    target_title: window_title.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()),
+                    fg_hwnd: GetForegroundWindow(),
+                    found_hwnd: None,
+                    found_title: String::new(),
+                    found_rect: [0, 0, 0, 0],
                 };
+                let _ = EnumWindows(
+                    Some(enum_pid_proc),
+                    LPARAM(&mut state as *mut _ as isize),
+                );
+                if let Some(hwnd) = state.found_hwnd {
+                    (hwnd, state.found_title, state.found_rect)
+                } else {
+                    return Err(format!("No window matching pid {} was found", target_pid));
+                }
+            } else if let Some(title_filter) = window_title.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                let trimmed = title_filter.to_lowercase();
+                let mut state = WindowSearchState {
+                    target_title: trimmed,
+                    found_hwnd: None,
+                    found_title: String::new(),
+                    found_rect: [0, 0, 0, 0],
+                };
+                let _ = EnumWindows(
+                    Some(enum_windows_proc),
+                    LPARAM(&mut state as *mut _ as isize),
+                );
+                if let Some(hwnd) = state.found_hwnd {
+                    (hwnd, state.found_title, state.found_rect)
+                } else {
+                    return Err(format!(
+                        "No window matching title '{}' was found",
+                        title_filter
+                    ));
+                }
+            } else {
+                get_foreground_window_info()?
+            };
 
             let root_elem = automation
                 .ElementFromHandle(target_hwnd)
@@ -536,11 +613,11 @@ mod win_uia {
                 continue;
             }
 
-            // Pruning rule 2: skip elements with zero or negative bounding box
+            // Pruning rule 2: skip elements with zero or negative bounding box, or offscreen sentinel (-32000)
             let rect_win = child.CurrentBoundingRectangle().unwrap_or(RECT::default());
             let width = rect_win.right - rect_win.left;
             let height = rect_win.bottom - rect_win.top;
-            if width <= 0 || height <= 0 {
+            if width <= 0 || height <= 0 || rect_win.left <= -10000 || rect_win.top <= -10000 {
                 continue;
             }
 
@@ -725,12 +802,58 @@ mod non_windows_fallback {
         window_title: Option<&str>,
         query: Option<&str>,
         compact: Option<bool>,
+        pid: Option<u32>,
+        hwnd: Option<usize>,
     ) -> Result<UiTreeResponse, String> {
         let max_depth = depth.unwrap_or(5).clamp(1, 15);
         let windows = xcap::Window::all().unwrap_or_default();
 
-        let title_filter_trimmed = window_title.map(|s| s.trim()).filter(|s| !s.is_empty());
-        let target_window = if let Some(filter) = title_filter_trimmed {
+        let target_window = if let Some(h) = hwnd {
+            let found = windows
+                .into_iter()
+                .enumerate()
+                .find(|(idx, w)| {
+                    let current_h = (w.id().unwrap_or(0) as usize).max(idx + 1);
+                    current_h == h
+                })
+                .map(|(_, w)| w);
+            match found {
+                Some(ref w) if w.is_minimized().unwrap_or(false) => {
+                    return Err(format!("Window handle {} is minimized or off-screen", h));
+                }
+                None => {
+                    return Err(format!("Invalid window handle {}", h));
+                }
+                _ => found,
+            }
+        } else if let Some(p) = pid {
+            let mut sys = sysinfo::System::new();
+            sys.refresh_processes();
+            let title_filter = window_title.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+            let found = windows.into_iter().find(|w| {
+                if w.is_minimized().unwrap_or(false) {
+                    return false;
+                }
+                let process_name = w.app_name().unwrap_or_default();
+                let matches_pid = sys.processes().iter().any(|(proc_pid, proc)| {
+                    proc_pid.as_u32() == p && proc.name().eq_ignore_ascii_case(&process_name)
+                });
+                if !matches_pid {
+                    return false;
+                }
+                if let Some(ref filter) = title_filter {
+                    let t = w.title().unwrap_or_default().to_lowercase();
+                    let a = w.app_name().unwrap_or_default().to_lowercase();
+                    t.contains(filter) || a.contains(filter)
+                } else {
+                    true
+                }
+            });
+            if found.is_none() {
+                return Err(format!("No window matching pid {} was found", p));
+            }
+            found
+        } else if let Some(filter) = window_title.map(|s| s.trim()).filter(|s| !s.is_empty()) {
             let lower = filter.to_lowercase();
             let found = windows.into_iter().find(|w| {
                 let t = w.title().unwrap_or_default().to_lowercase();
@@ -925,7 +1048,7 @@ pub fn get_ui_tree(
     depth: Option<u32>,
     window_title: Option<&str>,
 ) -> Result<UiTreeResponse, String> {
-    get_ui_tree_filtered(depth, window_title, None, None)
+    get_ui_tree_targeted(depth, window_title, None, None, None, None)
 }
 
 /// Retrieves structured, pruned interactive UI element tree with query and compact filtering.
@@ -935,14 +1058,26 @@ pub fn get_ui_tree_filtered(
     query: Option<&str>,
     compact: Option<bool>,
 ) -> Result<UiTreeResponse, String> {
+    get_ui_tree_targeted(depth, window_title, query, compact, None, None)
+}
+
+/// Retrieves structured, pruned interactive UI element tree with targeting (pid, hwnd), query and compact filtering.
+pub fn get_ui_tree_targeted(
+    depth: Option<u32>,
+    window_title: Option<&str>,
+    query: Option<&str>,
+    compact: Option<bool>,
+    pid: Option<u32>,
+    hwnd: Option<usize>,
+) -> Result<UiTreeResponse, String> {
     #[cfg(windows)]
     {
-        win_uia::collect_windows_ui_tree(depth, window_title, query, compact)
+        win_uia::collect_windows_ui_tree(depth, window_title, query, compact, pid, hwnd)
     }
 
     #[cfg(not(windows))]
     {
-        non_windows_fallback::collect_fallback_ui_tree(depth, window_title, query, compact)
+        non_windows_fallback::collect_fallback_ui_tree(depth, window_title, query, compact, pid, hwnd)
     }
 }
 

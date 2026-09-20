@@ -755,3 +755,50 @@ async fn test_chromatic_contrast_edge_detection() {
         "Chromatic contrast between saturated red and green must be detected despite similar luminance"
     );
 }
+
+#[tokio::test]
+async fn test_som_window_title_auto_cropping() {
+    let _guard = TEST_LOCK.lock().await;
+    reset_mark_cache();
+    reset_window_mocks();
+
+    use at_pc_agent::tools::window::set_mock_windows;
+    use at_pc_protocol::models::WindowInfo;
+
+    // Mock an active target window with smaller dimensions (e.g. 800x600 inside 1920x1080)
+    set_mock_windows(Some(vec![WindowInfo {
+        hwnd: 12345,
+        pid: 9999,
+        title: "Lark Messenger".to_string(),
+        process_name: "Lark.exe".to_string(),
+        is_minimized: false,
+        is_foreground: true,
+        rect: [100, 100, 800, 600],
+        display_index: Some(0),
+    }]));
+
+    let canvas = DynamicImage::ImageRgba8(RgbaImage::from_pixel(1920, 1080, Rgba([255, 255, 255, 255])));
+
+    let res = generate_marked_screen_from_image_ext(
+        canvas,
+        Some("grid"),
+        Some(2),
+        None,
+        "jpeg",
+        80,
+        None,
+        None, // No explicit crop passed
+        0,
+        Some("Lark"),
+        None,
+    )
+    .expect("generate_marked_screen_from_image_ext should succeed");
+
+    assert_eq!(res.width, 800, "Width should be auto-cropped to window bounds");
+    assert_eq!(res.height, 600, "Height should be auto-cropped to window bounds");
+    assert_eq!(res.original_width, Some(1920));
+    assert_eq!(res.original_height, Some(1080));
+
+    reset_window_mocks();
+}
+

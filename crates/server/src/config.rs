@@ -8,7 +8,44 @@ fn default_listen_host() -> String {
     "0.0.0.0".to_string()
 }
 
+/// Returns a suitable directory for runtime data and logs.
+/// Checks AT_PC_DATA_DIR -> current working directory (if not / and writable) ->
+/// XDG data dir (~/.local/share/at-pc) on Unix -> exe directory -> temp_dir.
+pub fn default_data_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("AT_PC_DATA_DIR") {
+        let p = PathBuf::from(dir);
+        if std::fs::create_dir_all(&p).is_ok() {
+            return p;
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd != std::path::Path::new("/") {
+            return cwd;
+        }
+    }
+    #[cfg(unix)]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let xdg = PathBuf::from(home).join(".local/share/at-pc");
+            if std::fs::create_dir_all(&xdg).is_ok() {
+                return xdg;
+            }
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            if parent != std::path::Path::new("/") {
+                return parent.to_path_buf();
+            }
+        }
+    }
+    std::env::temp_dir()
+}
+
 fn default_audit_log_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("AT_PC_AUDIT_FILE") {
+        return Some(PathBuf::from(path));
+    }
     let default_file = "audit.jsonl";
     if let Ok(cwd) = std::env::current_dir() {
         if cwd != std::path::Path::new("/") {
@@ -17,10 +54,12 @@ fn default_audit_log_path() -> Option<PathBuf> {
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            return Some(parent.join(default_file));
+            if parent != std::path::Path::new("/") {
+                return Some(parent.join(default_file));
+            }
         }
     }
-    Some(PathBuf::from(default_file))
+    Some(default_data_dir().join(default_file))
 }
 
 /// Checks whether a role is authorized for a shared Agent tool or explicit Server meta-tool.
@@ -81,6 +120,9 @@ pub struct ServerConfig {
     /// Path to persistent audit log file (JSONL format)
     #[serde(default = "default_audit_log_path")]
     pub audit_log_path: Option<PathBuf>,
+    /// Optional path for the server runtime log file (default: "at-pc-server.log")
+    #[serde(default)]
+    pub log_file_path: Option<PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -101,6 +143,7 @@ impl Default for ServerConfig {
             tls_client_ca_path: None,
             roles: HashMap::new(),
             audit_log_path: default_audit_log_path(),
+            log_file_path: None,
         }
     }
 }
@@ -110,8 +153,10 @@ impl ServerConfig {
         Self::default()
     }
 
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let content = std::fs::read_to_string(path)?;
+    pub fn from_file(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let content = std::fs::read_to_string(path.as_ref())?;
         let config: Self = toml::from_str(&content)?;
         Ok(config)
     }

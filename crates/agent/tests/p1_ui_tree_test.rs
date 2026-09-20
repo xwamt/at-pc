@@ -161,7 +161,7 @@ async fn test_executor_uia_tool_dispatch_and_permission_toggle() {
     // 1. Without computer-use enabled
     let executor_disabled = AgentExecutor::new().with_computer_use(false);
 
-    // get_ui_tree is read-only diagnostic, should work without computer_use
+    // get_ui_tree and list_windows are read-only diagnostics, should work without computer_use
     let tree_res = executor_disabled
         .execute("get_ui_tree", json!({ "depth": 3 }))
         .await;
@@ -169,6 +169,15 @@ async fn test_executor_uia_tool_dispatch_and_permission_toggle() {
         tree_res.is_ok(),
         "get_ui_tree should be allowed without computer_use: {:?}",
         tree_res.err()
+    );
+
+    let list_win_res = executor_disabled
+        .execute("list_windows", json!({ "only_visible": true }))
+        .await;
+    assert!(
+        list_win_res.is_ok(),
+        "list_windows should be allowed without computer_use: {:?}",
+        list_win_res.err()
     );
 
     // click_element requires computer_use
@@ -405,3 +414,31 @@ fn test_session_unique_element_ids_monotonic() {
         "Elements from previous tree call must remain cached across queries"
     );
 }
+
+#[tokio::test]
+async fn test_get_ui_tree_with_pid_and_hwnd_targeting() {
+    let _lock = TEST_MUTEX.lock().await;
+    let executor = AgentExecutor::new().with_computer_use(true);
+
+    // 1. Invalid HWND should fail cleanly
+    let res_bad_hwnd = executor
+        .execute("get_ui_tree", json!({ "hwnd": 999_999_999 }))
+        .await;
+    assert!(res_bad_hwnd.is_err(), "Invalid HWND must return an error");
+    assert!(res_bad_hwnd.unwrap_err().contains("Invalid window handle"));
+
+    // 2. Normal call returns valid non-sentinel coordinates (> -10000)
+    let res_ok = executor
+        .execute("get_ui_tree", json!({ "depth": 2 }))
+        .await
+        .expect("get_ui_tree should succeed");
+    let elements = res_ok["elements"].as_array().unwrap();
+    for el in elements {
+        let rect = el["rect"].as_array().unwrap();
+        let left = rect[0].as_i64().unwrap();
+        let top = rect[1].as_i64().unwrap();
+        assert!(left > -10000, "Element rect left ({}) should not be sentinel offscreen coordinate", left);
+        assert!(top > -10000, "Element rect top ({}) should not be sentinel offscreen coordinate", top);
+    }
+}
+

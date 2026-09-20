@@ -829,9 +829,42 @@ pub fn generate_marked_screen_from_image_ext(
     let orig_height = dynamic_img.height();
     let mon_off = monitor_offset.unwrap_or([0, 0]);
 
-    // 1. Apply ROI cropping and downscaling
+    // 1. Apply ROI cropping and downscaling (auto-crop to target window when window_title is supplied and crop is None)
+    let resolved_crop = if crop.is_none() && window_title.is_some() {
+        if let Some(target_title) = window_title {
+            let lower = target_title.to_lowercase();
+            if let Ok(windows) = crate::tools::window::list_windows(false) {
+                windows.into_iter().find(|w| {
+                    w.title.to_lowercase().contains(&lower)
+                        || w.process_name.to_lowercase().contains(&lower)
+                }).and_then(|w| {
+                    let [wx, wy, ww, wh] = w.rect;
+                    if ww > 0 && wh > 0 {
+                        let rel_x = (wx - mon_off[0]).max(0) as u32;
+                        let rel_y = (wy - mon_off[1]).max(0) as u32;
+                        let clamp_w = (ww as u32).min(orig_width.saturating_sub(rel_x));
+                        let clamp_h = (wh as u32).min(orig_height.saturating_sub(rel_y));
+                        if clamp_w > 0 && clamp_h > 0 && (clamp_w < orig_width || clamp_h < orig_height) {
+                            Some([rel_x, rel_y, clamp_w, clamp_h])
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        crop
+    };
+
     let (processed_img, effective_crop, scale_factor) =
-        crate::tools::screen::process_dynamic_image(dynamic_img, max_dimension, crop);
+        crate::tools::screen::process_dynamic_image(dynamic_img, max_dimension, resolved_crop);
 
     let final_width = processed_img.width();
     let final_height = processed_img.height();

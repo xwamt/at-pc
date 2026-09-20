@@ -31,11 +31,23 @@ pub fn dispatch(kind: AgentToolKind, ctx: &DispatchContext<'_>) -> Option<Result
                 .or_else(|| ctx.arguments.get("filter"))
                 .and_then(Value::as_str);
             let compact = ctx.arguments.get("compact").and_then(Value::as_bool);
-            serde_json::to_value(uia::get_ui_tree_filtered(
+            let pid = ctx.arguments.get("pid").and_then(|value| match value {
+                Value::Number(number) => number.as_u64().map(|value| value as u32),
+                Value::String(text) => text.trim().parse::<u32>().ok(),
+                _ => None,
+            });
+            let hwnd = ctx.arguments.get("hwnd").and_then(|value| match value {
+                Value::Number(number) => number.as_u64().map(|value| value as usize),
+                Value::String(text) => text.trim().parse::<usize>().ok(),
+                _ => None,
+            });
+            serde_json::to_value(uia::get_ui_tree_targeted(
                 depth,
                 window_title,
                 query,
                 compact,
+                pid,
+                hwnd,
             )?)
             .map_err(|e| e.to_string())
         }),

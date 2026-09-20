@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  at-pc-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: at-pc-server:latest
+    container_name: at-pc-server
+    restart: always
+    ports:
+      - "9800:9800" # MCP HTTP / SSE & Web Management Console
+      - "9801:9801" # Agent WebSocket Gateway
+    volumes:
+      - at-pc-data:/var/lib/at-pc
+      - at-pc-logs:/var/log/at-pc
+      - ./server_config.example.toml:/etc/at-pc/server_config.toml:ro
+    environment:
+      - RUST_LOG=info
+      - AT_PC_DATA_DIR=/var/lib/at-pc
+      - AT_PC_LOG_DIR=/var/log/at-pc
+
+volumes:
+  at-pc-data:
+    driver: local
+  at-pc-logs:
+    driver: local

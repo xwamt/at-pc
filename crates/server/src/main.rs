@@ -31,6 +31,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("    --tls-key <PATH>      Path to TLS private key file for HTTPS / WSS");
         println!("    --tls-ca <PATH>       Path to client CA certificate for mTLS");
         println!("    --audit-file <PATH>   Path to JSONL audit log file (default: audit.jsonl)");
+        println!(
+            "    --log-file <PATH>     Path to server runtime log file (default: at-pc-server.log)"
+        );
         println!("    --stdio               Run MCP server in stdio mode (for local IDE / Cursor)");
         println!("    --no-tray             Run without system tray icon in console mode");
         println!("    -h, --help            Print help information");
@@ -40,7 +43,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let stdio_mode = args.iter().any(|a| a == "--stdio");
 
     // Configure logging (if in stdio mode, log to stderr only to avoid corrupting stdio JSON-RPC)
-    let log_file_path = at_pc_server::mcp::default_log_file_path();
+    let mut custom_log_file = std::env::var("AT_PC_LOG_FILE")
+        .ok()
+        .map(std::path::PathBuf::from);
+    for i in 0..args.len() {
+        if args[i] == "--log-file" && i + 1 < args.len() {
+            custom_log_file = Some(std::path::PathBuf::from(&args[i + 1]));
+        }
+    }
+    let log_file_path = custom_log_file.unwrap_or_else(at_pc_server::mcp::default_log_file_path);
 
     let file_appender = std::fs::OpenOptions::new()
         .create(true)
@@ -92,17 +103,49 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 1. Load configuration
     let mut config = ServerConfig::default();
 
-    // Check for --config
-    for i in 0..args.len() {
-        if args[i] == "--config" && i + 1 < args.len() {
-            match ServerConfig::from_file(&args[i + 1]) {
+    // Check for explicit --config or default search paths
+    let explicit_config = (0..args.len())
+        .find(|&i| args[i] == "--config" && i + 1 < args.len())
+        .map(|i| std::path::PathBuf::from(&args[i + 1]));
+
+    if let Some(path) = explicit_config {
+        match ServerConfig::from_file(&path) {
+            Ok(cfg) => {
+                info!("Loaded configuration from {}", path.display());
+                config = cfg;
+            }
+            Err(e) => {
+                error!("Failed to load config file {}: {}", path.display(), e);
+                std::process::exit(1);
+            }
+        }
+    } else if let Ok(env_path) = std::env::var("AT_PC_CONFIG") {
+        let path = std::path::PathBuf::from(env_path);
+        if path.is_file() {
+            match ServerConfig::from_file(&path) {
                 Ok(cfg) => {
-                    info!("Loaded configuration from {}", args[i + 1]);
+                    info!("Loaded configuration from AT_PC_CONFIG: {}", path.display());
                     config = cfg;
                 }
                 Err(e) => {
-                    error!("Failed to load config file {}: {}", args[i + 1], e);
+                    error!("Failed to load config file {}: {}", path.display(), e);
                     std::process::exit(1);
+                }
+            }
+        }
+    } else {
+        // Probe default config locations
+        let candidates = [
+            std::path::PathBuf::from("server_config.toml"),
+            #[cfg(unix)]
+            std::path::PathBuf::from("/etc/at-pc/server_config.toml"),
+        ];
+        for candidate in candidates {
+            if candidate.is_file() {
+                if let Ok(cfg) = ServerConfig::from_file(&candidate) {
+                    info!("Loaded default configuration from {}", candidate.display());
+                    config = cfg;
+                    break;
                 }
             }
         }
@@ -141,16 +184,24 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if args[i] == "--audit-file" && i + 1 < args.len() {
             config.audit_log_path = Some(std::path::PathBuf::from(&args[i + 1]));
         }
+        if args[i] == "--log-file" && i + 1 < args.len() {
+            config.log_file_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        }
     }
 
+    #[cfg(feature = "tray")]
     let enable_tray = at_pc_server::tray::should_enable_tray(&args);
+    #[cfg(not(feature = "tray"))]
+    let enable_tray = false;
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
 
+    #[cfg(feature = "tray")]
     if enable_tray {
-        let (shutdown_broadcast_tx, shutdown_broadcast_rx) = tokio::sync::broadcast::channel::<()>(1);
+        let (shutdown_broadcast_tx, shutdown_broadcast_rx) =
+            tokio::sync::broadcast::channel::<()>(1);
         let mut builder = winit::event_loop::EventLoopBuilder::<at_pc_server::tray::ServerAppEvent>::with_user_event();
         #[cfg(target_os = "macos")]
         {
@@ -189,7 +240,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         )
                     }
                     Err(e) => {
-                        error!("Failed to initialize server tray ({e}); falling back to console mode");
+                        error!(
+                            "Failed to initialize server tray ({e}); falling back to console mode"
+                        );
                         rt.block_on(run_server_pipeline(config, stdio_mode, None, None))
                     }
                 }
@@ -202,13 +255,26 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     } else {
         rt.block_on(run_server_pipeline(config, stdio_mode, None, None))
     }
+
+    #[cfg(not(feature = "tray"))]
+    {
+        let _ = enable_tray;
+        rt.block_on(run_server_pipeline(config, stdio_mode, None, None))
+    }
 }
+
+#[cfg(feature = "tray")]
+type TrayCompletionProxy =
+    Option<winit::event_loop::EventLoopProxy<at_pc_server::tray::ServerAppEvent>>;
+
+#[cfg(not(feature = "tray"))]
+type TrayCompletionProxy = Option<()>;
 
 async fn run_server_pipeline(
     config: ServerConfig,
     stdio_mode: bool,
     shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
-    completion_proxy: Option<winit::event_loop::EventLoopProxy<at_pc_server::tray::ServerAppEvent>>,
+    completion_proxy: TrayCompletionProxy,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Starting at-pc-server v{}", env!("CARGO_PKG_VERSION"));
     info!(
@@ -225,8 +291,14 @@ async fn run_server_pipeline(
                 Ok(p) if p != std::path::Path::new("/") => p.join("terminals_meta.json"),
                 _ => std::env::current_exe()
                     .ok()
-                    .and_then(|p| p.parent().map(|d| d.join("terminals_meta.json")))
-                    .unwrap_or_else(|| std::path::PathBuf::from("terminals_meta.json")),
+                    .and_then(|p| {
+                        p.parent()
+                            .filter(|d| *d != std::path::Path::new("/"))
+                            .map(|d| d.join("terminals_meta.json"))
+                    })
+                    .unwrap_or_else(|| {
+                        at_pc_server::config::default_data_dir().join("terminals_meta.json")
+                    }),
             });
     let meta_store = Arc::new(at_pc_server::meta_store::TerminalMetaStore::new(meta_file));
     let registry = Arc::new(TerminalRegistry::with_store(
@@ -301,9 +373,12 @@ async fn run_server_pipeline(
         error!(%error, "failed to durably shut down persistence writers");
     }
 
+    #[cfg(feature = "tray")]
     if let Some(proxy) = completion_proxy {
         let _ = proxy.send_event(at_pc_server::tray::ServerAppEvent::ShutdownCompleted);
     }
+    #[cfg(not(feature = "tray"))]
+    let _ = completion_proxy;
 
     gateway_result
 }

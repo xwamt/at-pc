@@ -20,13 +20,16 @@ async fn test_window_tools_permission_toggle() {
     let disabled = AgentExecutor::new();
     assert!(!disabled.enable_computer_use);
 
-    let tools = [
-        ("list_windows", json!({})),
+    // list_windows is read-only inspection, so it should succeed even with computer_use = false
+    let list_res = disabled.execute("list_windows", json!({})).await;
+    assert!(list_res.is_ok(), "list_windows must be allowed when computer_use is disabled");
+
+    let mutation_tools = [
         ("focus_window", json!({"title": "test"})),
         ("close_window", json!({"title": "test"})),
     ];
 
-    for (tool_name, args) in tools {
+    for (tool_name, args) in mutation_tools {
         let err = disabled.execute(tool_name, args).await.unwrap_err();
         assert!(
             err.to_lowercase().contains("computer-use") && err.to_lowercase().contains("disabled"),

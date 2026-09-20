@@ -108,3 +108,25 @@ fn validation_rejects_malformed_property_and_required_schemas() {
         }
     }
 }
+
+#[test]
+fn test_perception_channel_tool_schemas_and_tier_descriptions() {
+    let ui_tree = agent_tool("get_ui_tree").expect("get_ui_tree must exist");
+    assert!(ui_tree.description.contains("Tier 2"), "get_ui_tree description must indicate Tier 2");
+    assert!(ui_tree.description.contains("UWP"), "get_ui_tree description must note UWP fallback");
+    assert!(ui_tree.input_schema["properties"].get("pid").is_some(), "get_ui_tree must accept pid");
+    assert!(ui_tree.input_schema["properties"].get("hwnd").is_some(), "get_ui_tree must accept hwnd");
+
+    let list_win = agent_tool("list_windows").expect("list_windows must exist");
+    assert_eq!(list_win.risk, ToolRisk::ReadOnly, "list_windows must be ReadOnly");
+    assert_eq!(list_win.required_role, Role::Viewer, "list_windows must require Viewer role");
+
+    let capture = agent_tool("capture_screen").expect("capture_screen must exist");
+    assert!(capture.description.contains("Tier 3"), "capture_screen description must indicate Tier 3");
+    assert!(capture.input_schema["properties"].get("include_image").is_some(), "capture_screen must accept include_image");
+
+    let marked = agent_tool("get_marked_screen").expect("get_marked_screen must exist");
+    assert!(marked.description.contains("Tier 3"), "get_marked_screen description must indicate Tier 3");
+    assert!(marked.input_schema["properties"].get("include_image").is_some(), "get_marked_screen must accept include_image");
+}
+

@@ -63,8 +63,12 @@ impl AgentTray {
             terminal_id.to_string()
         };
         let id_item = MenuItem::with_id("term_id", format!("终端 ID: {}", id_display), false, None);
-        let status_item =
-            MenuItem::with_id("status", format_status_menu_text(&initial_status), false, None);
+        let status_item = MenuItem::with_id(
+            "status",
+            format_status_menu_text(&initial_status),
+            false,
+            None,
+        );
 
         let show_window = MenuItem::new("🖥️ 显示主界面", true, None);
         let copy_id = MenuItem::new("📋 复制终端 ID", true, None);
@@ -140,7 +144,9 @@ mod tests {
     #[test]
     fn test_format_toggle_conn_text() {
         assert!(format_toggle_conn_text(&ClientConnectionStatus::Connected).contains("切断协助"));
-        assert!(format_toggle_conn_text(&ClientConnectionStatus::Disconnected).contains("立即重连"));
+        assert!(
+            format_toggle_conn_text(&ClientConnectionStatus::Disconnected).contains("立即重连")
+        );
         assert!(format_toggle_conn_text(&ClientConnectionStatus::Connecting).contains("立即重连"));
     }
 

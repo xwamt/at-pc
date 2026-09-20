@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import zipfile
 
 NOISE_FILES = [
@@ -227,6 +228,46 @@ def package_target(base_dir, dist_dir, triple, *, target_root, use_target_flag, 
     return [dist_agent, dist_server, zip_basename]
 
 
+def package_server_linux_bundle(base_dir, dist_dir, version):
+    bundle_name = "at-pc-server-linux.tar.gz"
+    bundle_path = os.path.join(dist_dir, bundle_name)
+    if os.path.exists(bundle_path):
+        os.remove(bundle_path)
+
+    include_paths = [
+        "Dockerfile",
+        "docker-compose.yml",
+        "server_config.example.toml",
+        "README.md",
+        "Cargo.toml",
+        "Cargo.lock",
+        "deploy",
+        "media",
+        "crates",
+    ]
+
+    def _filter(tarinfo):
+        parts = tarinfo.name.split("/")
+        if any(
+            p in ("node_modules", "target", ".git", ".DS_Store", "__pycache__")
+            for p in parts
+        ):
+            return None
+        return tarinfo
+
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        ver_file = os.path.join(dist_dir, "VERSION")
+        if os.path.isfile(ver_file):
+            tar.add(ver_file, arcname="at-pc-server/VERSION")
+
+        for rel in include_paths:
+            full = os.path.join(base_dir, rel)
+            if os.path.exists(full):
+                tar.add(full, arcname=f"at-pc-server/{rel}", filter=_filter)
+
+    return bundle_name
+
+
 def main(argv=None, *, run=None, base_dir=None, env=None):
     run = run or subprocess.run
     env = os.environ if env is None else env
@@ -243,7 +284,17 @@ def main(argv=None, *, run=None, base_dir=None, env=None):
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Build and package all supported targets (aarch64-apple-darwin, x86_64-apple-darwin, x86_64-pc-windows-gnu).",
+        help="Build and package all supported targets (aarch64-apple-darwin, x86_64-apple-darwin, x86_64-pc-windows-gnu, x86_64-unknown-linux-gnu).",
+    )
+    parser.add_argument(
+        "--server-bundle",
+        action="store_true",
+        help="Package at-pc-server Linux deployment bundle (Dockerfile, docker-compose, systemd, scripts).",
+    )
+    parser.add_argument(
+        "--server-bundle-only",
+        action="store_true",
+        help="Package only the at-pc-server Linux deployment bundle without compiling binaries.",
     )
     args = parser.parse_args(argv)
 
@@ -263,10 +314,24 @@ def main(argv=None, *, run=None, base_dir=None, env=None):
     extras = ["VERSION", *_copy_extras(base_dir, dist_dir)]
     artifacts = ["VERSION"]
 
+    if args.server_bundle_only:
+        bundle = package_server_linux_bundle(base_dir, dist_dir, version)
+        artifacts.append(bundle)
+        artifacts = list(dict.fromkeys(artifacts))
+        write_sha256sums(dist_dir, artifacts)
+        print(f"=== at-pc v{version} Server Bundle Packaging Complete ===")
+        for art in artifacts:
+            path = os.path.join(dist_dir, art)
+            size_mb = os.path.getsize(path) / (1024 * 1024)
+            print(f"{art:<25} {size_mb:6.2f} MB  SHA256: {sha256_file(path)}")
+        print(f"SHA256SUMS written to {os.path.join(dist_dir, 'SHA256SUMS')}")
+        return 0
+
     supported_all = [
         "aarch64-apple-darwin",
         "x86_64-apple-darwin",
         "x86_64-pc-windows-gnu",
+        "x86_64-unknown-linux-gnu",
     ]
 
     if args.all:
@@ -295,6 +360,10 @@ def main(argv=None, *, run=None, base_dir=None, env=None):
                 run=run,
             )
         )
+
+    if args.all or args.server_bundle:
+        bundle = package_server_linux_bundle(base_dir, dist_dir, version)
+        artifacts.append(bundle)
 
     artifacts = list(dict.fromkeys(artifacts))
     write_sha256sums(dist_dir, artifacts)

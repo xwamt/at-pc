@@ -15,15 +15,17 @@ pub fn dispatch(kind: AgentToolKind, ctx: &DispatchContext<'_>) -> Option<Result
         return None;
     }
     match kind {
-        K::ListWindows => Some(computer_use(ctx.enable_computer_use, || {
+        K::ListWindows => {
             let only_visible = ctx
                 .arguments
                 .get("only_visible")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
-            serde_json::to_value(window::list_windows(only_visible)?)
-                .map_err(|error| error.to_string())
-        })),
+            Some(
+                window::list_windows(only_visible)
+                    .and_then(|wins| serde_json::to_value(wins).map_err(|e| e.to_string())),
+            )
+        }
         K::FocusWindow => Some(computer_use(ctx.enable_computer_use, || {
             window::focus_window(
                 ctx.arguments.get("title").and_then(Value::as_str),

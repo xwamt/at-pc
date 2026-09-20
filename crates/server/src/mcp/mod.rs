@@ -34,12 +34,15 @@ pub struct McpHttpState {
 
 /// Returns the server log path used by both the tracing writer and dashboard tail endpoint.
 pub fn default_log_file_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("AT_PC_LOG_FILE") {
+        return std::path::PathBuf::from(path);
+    }
     match std::env::current_dir() {
         Ok(path) if path != std::path::Path::new("/") => path.join("at-pc-server.log"),
         _ => std::env::current_exe()
             .ok()
             .and_then(|path| path.parent().map(|dir| dir.join("at-pc-server.log")))
-            .unwrap_or_else(|| std::path::PathBuf::from("at-pc-server.log")),
+            .unwrap_or_else(|| crate::config::default_data_dir().join("at-pc-server.log")),
     }
 }
 
@@ -103,10 +106,15 @@ pub fn create_mcp_http_router(router: Arc<McpRouter>, config: ServerConfig) -> R
             ])
     };
 
+    let log_file = config
+        .log_file_path
+        .clone()
+        .unwrap_or_else(default_log_file_path);
+
     let state = McpHttpState {
         router,
         config: config.clone(),
-        log_file_path: default_log_file_path(),
+        log_file_path: log_file,
     };
 
     Router::new()
@@ -503,6 +511,24 @@ pub async fn handle_jsonrpc_request_with_context(
 
     let result = match method {
         "initialize" => {
+            let instructions = "# at-pc Desktop Automation & Operations Guidelines\n\
+When operating on at-pc agent terminals, follow this 3-tier hierarchy:\n\n\
+1. **Tier 1 (Terminal / API First - 100% Accuracy, Zero Vision Tokens)**:\n   \
+   - For diagnostics, system queries, service management, configuration editing, or process control:\n     \
+     Always use `get_system_overview`, `list_processes`, `manage_service`, `exec_powershell`, `exec_cmd`, `read_text_file`, `write_text_file`.\n   \
+   - Never use screenshot or mouse clicks to operate system settings or control panels if an API/command tool is available.\n\n\
+2. **Tier 2 (Structured UI Tree / DOM - Token-Efficient, Deterministic Semantic Interaction)**:\n   \
+   - When interacting with native desktop applications, call `get_ui_tree` first to inspect the window's interactive element tree.\n   \
+   - Note on UWP / Electron: Windows UWP apps (ApplicationFrameHost/XAML) and some Electron apps may expose 0 child elements under UIA. If `total_elements` is 0, immediately switch to Tier 3 (`get_marked_screen`).\n   \
+   - Use `click_element(element_id)` for background invocation without mouse movement, or center click fallback.\n   \
+   - Use `set_element_text(element_id, text)` to set text programmatically without typing lag or keyboard focus drift.\n\n\
+3. **Tier 3 (Visual ROI & Set-of-Mark Fallback - Use Only When Needed)**:\n   \
+   - Only call `capture_screen` or `get_marked_screen` when interacting with custom-drawn Canvas, games, or legacy non-accessible windows.\n   \
+   - Always supply `crop` or `max_dimension` when capturing screens to conserve visual tokens.\n   \
+   - Use `get_marked_screen` to obtain visually annotated Set-of-Mark screenshots with numbered badges (#1, #2...).\n   \
+   - Directly invoke `click_mark(mark_id)` or `mouse_click(mark_id=N)` to click without calculating pixel coordinates.\n   \
+   - Set `include_image: false` when you only need mark coordinates or when saving images to disk (`save_path`/`server_save_path`) to conserve visual tokens.";
+
             let res = json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {
@@ -516,7 +542,8 @@ pub async fn handle_jsonrpc_request_with_context(
                 "serverInfo": {
                     "name": "at-pc-server",
                     "version": env!("CARGO_PKG_VERSION")
-                }
+                },
+                "instructions": instructions
             });
             Ok(res)
         }
@@ -644,7 +671,18 @@ When operating on at-pc agent terminals, follow this 3-tier hierarchy:\n\n\
                                 if let Ok(decoded_bytes) =
                                     base64::engine::general_purpose::STANDARD.decode(clean_b64)
                                 {
-                                    let path = std::path::Path::new(ssp.trim());
+                                    let raw_path = ssp.trim();
+                                    #[cfg(unix)]
+                                    let normalized_path =
+                                        if raw_path.contains('\\') && !raw_path.contains('/') {
+                                            raw_path.replace('\\', "/")
+                                        } else {
+                                            raw_path.to_string()
+                                        };
+                                    #[cfg(not(unix))]
+                                    let normalized_path = raw_path.to_string();
+
+                                    let path = std::path::Path::new(&normalized_path);
                                     if let Some(parent) = path.parent() {
                                         if !parent.as_os_str().is_empty() && !parent.exists() {
                                             let _ = std::fs::create_dir_all(parent);
@@ -718,18 +756,65 @@ When operating on at-pc agent terminals, follow this 3-tier hierarchy:\n\n\
                                 display_idx, width, height, scale_note, crop_note, mime_type, file_path_note, server_saved_note
                             );
 
+                            let mut mark_text = String::new();
+                            if let Some(marks_array) = val.get("marks").and_then(|v| v.as_array()) {
+                                let total_marks = val
+                                    .get("total_marks")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(marks_array.len() as u64);
+                                let source = val
+                                    .get("source")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("auto");
+                                let scale_factor = val
+                                    .get("scale_factor")
+                                    .and_then(|v| v.as_f64());
+                                let scale_str = if let Some(sf) = scale_factor {
+                                    format!(", scale_factor: {:.1}", sf)
+                                } else {
+                                    String::new()
+                                };
+
+                                mark_text = format!(
+                                    "\n\nSet-of-Mark annotations (total: {}, strategy: {}{}):\n",
+                                    total_marks, source, scale_str
+                                );
+                                for m in marks_array {
+                                    let id = m.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let label = m.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                                    let ctype = m.get("control_type").and_then(|v| v.as_str()).unwrap_or("Control");
+                                    let rect = m.get("rect").map(|r| r.to_string()).unwrap_or_default();
+                                    let center = m.get("center").map(|c| c.to_string()).unwrap_or_default();
+                                    mark_text.push_str(&format!(
+                                        "- mark_id: {}, type: {}, label: {:?}, center: {}, rect: {}\n",
+                                        id, ctype, label, center, rect
+                                    ));
+                                }
+                                mark_text.push_str("Hint: Invoke `click_mark(mark_id=N)` directly using the mark_id above without calculating pixel coordinates.\n");
+                            }
+
+                            let full_text = format!("{}{}", text_summary, mark_text);
+
+                            let include_image = tool_args
+                                .get("include_image")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(true);
+
+                            let mut content = vec![json!({
+                                "type": "text",
+                                "text": full_text
+                            })];
+
+                            if include_image {
+                                content.push(json!({
+                                    "type": "image",
+                                    "data": clean_b64,
+                                    "mimeType": mime_type
+                                }));
+                            }
+
                             Ok(json!({
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": text_summary
-                                    },
-                                    {
-                                        "type": "image",
-                                        "data": clean_b64,
-                                        "mimeType": mime_type
-                                    }
-                                ],
+                                "content": content,
                                 "isError": false
                             }))
                         } else {

@@ -74,7 +74,9 @@ impl AgentAppState {
     {
         let handle_opt = {
             let guard = self.tokio_handle.read().unwrap();
-            guard.clone().or_else(|| tokio::runtime::Handle::try_current().ok())
+            guard
+                .clone()
+                .or_else(|| tokio::runtime::Handle::try_current().ok())
         };
 
         if let Some(handle) = handle_opt {

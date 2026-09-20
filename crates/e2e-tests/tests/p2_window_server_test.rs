@@ -81,10 +81,15 @@ async fn test_window_tools_rbac_permission_enforcement() {
     let registry = Arc::new(TerminalRegistry::new());
     let router = McpRouter::new(registry.clone());
 
-    let window_tools = ["list_windows", "focus_window", "close_window"];
+    let window_mutation_tools = ["focus_window", "close_window"];
 
-    // Viewer Role: FORBIDDEN for all window tools
-    for tool_name in &window_tools {
+    // Viewer Role: ALLOWED for list_windows, FORBIDDEN for mutation tools
+    assert!(
+        is_tool_allowed_for_role(Role::Viewer, "list_windows"),
+        "Viewer should have permission for 'list_windows'"
+    );
+
+    for tool_name in &window_mutation_tools {
         assert!(
             !is_tool_allowed_for_role(Role::Viewer, tool_name),
             "Viewer should not have permission for '{}'",
@@ -110,8 +115,13 @@ async fn test_window_tools_rbac_permission_enforcement() {
         );
     }
 
-    // 3. Operator Role: FORBIDDEN for all window tools
-    for tool_name in &window_tools {
+    // 3. Operator Role: ALLOWED for list_windows, FORBIDDEN for mutation tools
+    assert!(
+        is_tool_allowed_for_role(Role::Operator, "list_windows"),
+        "Operator should have permission for 'list_windows'"
+    );
+
+    for tool_name in &window_mutation_tools {
         assert!(
             !is_tool_allowed_for_role(Role::Operator, tool_name),
             "Operator should not have permission for '{}'",
@@ -138,7 +148,8 @@ async fn test_window_tools_rbac_permission_enforcement() {
     }
 
     // 4. Admin Role: ALLOWED for all window tools
-    for tool_name in &window_tools {
+    let all_window_tools = ["list_windows", "focus_window", "close_window"];
+    for tool_name in &all_window_tools {
         assert!(
             is_tool_allowed_for_role(Role::Admin, tool_name),
             "Admin must have permission for '{}'",

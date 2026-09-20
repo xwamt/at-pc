@@ -79,6 +79,34 @@ export async function submitAuthToken() {
   }
 }
 
+export function copyTextToClipboard(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "-9999px";
+      textarea.setAttribute("readonly", "");
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const success = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      if (success) {
+        resolve();
+      } else {
+        reject(new Error("document.execCommand copy failed"));
+      }
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
 export function showMcpConfigModal() {
   const host = window.location.host;
   const sseUrl = `http://${host}/sse`;
@@ -94,8 +122,7 @@ export function showMcpConfigModal() {
     2,
   );
 
-  navigator.clipboard
-    .writeText(configJson)
+  copyTextToClipboard(configJson)
     .then(() => {
       const btn = byId("mcpConfigBtn");
       if (btn) {
@@ -109,8 +136,8 @@ export function showMcpConfigModal() {
     .catch(() => {});
 
   showModal(
-    "AI Agent MCP 配置 JSON (已复制剪贴板)",
-    `<p style="margin-bottom: 10px; font-size: 12.5px; color: var(--text-muted);">已将配置写入剪贴板，可直接粘贴至 Cursor 或 Claude 的 mcp.json：</p><pre>${configJson}</pre>`,
+    "AI Agent MCP 配置 JSON",
+    `<p style="margin-bottom: 10px; font-size: 12.5px; color: var(--text-muted);">已尝试写入剪贴板。若浏览器禁止直接访问剪贴板，请全选复制以下配置至 Cursor 或 Claude 的 mcp.json：</p><pre style="user-select: all;">${configJson}</pre>`,
   );
 }
 

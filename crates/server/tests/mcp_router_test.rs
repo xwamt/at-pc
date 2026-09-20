@@ -552,3 +552,126 @@ async fn test_capture_screen_server_save_path_and_image_base64() {
     assert!(written.starts_with(&[0xff, 0xd8, 0xff]));
     let _ = std::fs::remove_file(temp_save_file);
 }
+
+#[tokio::test]
+async fn test_mcp_initialize_contains_tier_instructions() {
+    let registry = Arc::new(TerminalRegistry::new());
+    let router = Arc::new(McpRouter::new(registry));
+
+    let init_req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {}
+    });
+    let init_resp = handle_jsonrpc_request(&router, &init_req).await.unwrap();
+    let instructions = init_resp["result"]["instructions"].as_str().expect("initialize must contain instructions");
+    assert!(instructions.contains("Tier 1"), "instructions must contain Tier 1 hierarchy");
+    assert!(instructions.contains("Tier 2"), "instructions must contain Tier 2 hierarchy");
+    assert!(instructions.contains("Tier 3"), "instructions must contain Tier 3 hierarchy");
+    assert!(instructions.contains("get_ui_tree"), "instructions must recommend get_ui_tree");
+    assert!(instructions.contains("UWP / Electron"), "instructions must explain UWP / Electron fallback");
+}
+
+#[tokio::test]
+async fn test_mcp_get_marked_screen_returns_marks_and_honors_include_image() {
+    let registry = Arc::new(TerminalRegistry::new());
+    let router = Arc::new(McpRouter::new(registry.clone()));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    let info = TerminalInfo {
+        terminal_id: "som-agent-1".to_string(),
+        hostname: "PC-SOM".to_string(),
+        username: "som_user".to_string(),
+        lan_ip: "192.168.1.55".to_string(),
+        os_version: "Windows 11".to_string(),
+        agent_version: "1.0.0".to_string(),
+    };
+    registry.register(info, tx).await;
+
+    let router_clone = router.clone();
+    tokio::spawn(async move {
+        while let Some(ServerToAgentMessage::InvokeTool { call_id, tool_name, .. }) = rx.recv().await {
+            if tool_name == "get_marked_screen" {
+                router_clone
+                    .handle_tool_result(AgentToServerMessage::ToolResult {
+                        call_id,
+                        success: true,
+                        result: json!({
+                            "display_index": 0,
+                            "width": 1280,
+                            "height": 800,
+                            "format": "jpeg",
+                            "image_base64": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
+                            "marks": [
+                                {
+                                    "id": 1,
+                                    "rect": [100, 200, 300, 40],
+                                    "center": [250, 220],
+                                    "label": "LoginButton",
+                                    "control_type": "Button"
+                                },
+                                {
+                                    "id": 2,
+                                    "rect": [100, 150, 300, 30],
+                                    "center": [250, 165],
+                                    "label": "UsernameInput",
+                                    "control_type": "Edit"
+                                }
+                            ],
+                            "total_marks": 2,
+                            "source": "auto",
+                            "scale_factor": 2.0
+                        }),
+                        error: None,
+                        duration_ms: 30,
+                    })
+                    .await;
+            }
+        }
+    });
+
+    // 1. Default call: returns text with marks AND image
+    let req_with_img = json!({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": {
+            "name": "get_marked_screen",
+            "arguments": {
+                "terminal_id": "som-agent-1"
+            }
+        }
+    });
+    let resp_with_img = handle_jsonrpc_request(&router, &req_with_img).await.unwrap();
+    let contents = resp_with_img["result"]["content"].as_array().unwrap();
+    assert_eq!(contents.len(), 2, "Default get_marked_screen must return text + image");
+    let text = contents[0]["text"].as_str().unwrap();
+    assert!(text.contains("mark_id: 1"), "Text summary must include mark_id 1");
+    assert!(text.contains("LoginButton"), "Text summary must include LoginButton");
+    assert!(text.contains("mark_id: 2"), "Text summary must include mark_id 2");
+    assert!(text.contains("scale_factor: 2.0"), "Text summary must include scale_factor");
+    assert_eq!(contents[1]["type"], "image");
+
+    // 2. include_image: false call: returns text with marks, NO image
+    let req_no_img = json!({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {
+            "name": "get_marked_screen",
+            "arguments": {
+                "terminal_id": "som-agent-1",
+                "include_image": false
+            }
+        }
+    });
+    let resp_no_img = handle_jsonrpc_request(&router, &req_no_img).await.unwrap();
+    let contents_no_img = resp_no_img["result"]["content"].as_array().unwrap();
+    assert_eq!(contents_no_img.len(), 1, "include_image=false must return ONLY text content");
+    assert_eq!(contents_no_img[0]["type"], "text");
+    let text_no_img = contents_no_img[0]["text"].as_str().unwrap();
+    assert!(text_no_img.contains("mark_id: 1"));
+    assert!(text_no_img.contains("UsernameInput"));
+}
+

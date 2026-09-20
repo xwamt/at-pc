@@ -756,12 +756,7 @@ async fn api_get_desktop_frame_raw(
         )
             .into_response()
     } else {
-        (
-            StatusCode::NOT_FOUND,
-            [("Content-Type", "text/plain; charset=utf-8")],
-            "No frame available yet",
-        )
-            .into_response()
+        StatusCode::NO_CONTENT.into_response()
     }
 }
 

@@ -6,6 +6,7 @@ pub mod router;
 pub mod shutdown;
 pub(crate) mod tail;
 pub mod tls;
+#[cfg(feature = "tray")]
 pub mod tray;
 pub mod ws;
 
