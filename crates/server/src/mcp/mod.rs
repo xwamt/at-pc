@@ -2,8 +2,8 @@ pub mod dashboard;
 pub mod tools;
 
 use axum::{
-    extract::{Request, State},
-    http::{HeaderMap, StatusCode},
+    extract::{ConnectInfo, Request, State},
+    http::{HeaderMap, Method, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -14,6 +14,7 @@ use axum::{
 use futures_util::stream::Stream;
 use serde_json::{json, Value};
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -30,6 +31,8 @@ pub struct McpHttpState {
     pub router: Arc<McpRouter>,
     pub config: ServerConfig,
     pub log_file_path: std::path::PathBuf,
+    /// Audit logger used by the auth layer to record AUTH_FAILED events.
+    pub audit_logger: Option<Arc<crate::audit::AuditLogger>>,
 }
 
 /// Returns the server log path used by both the tracing writer and dashboard tail endpoint.
@@ -111,49 +114,89 @@ pub fn create_mcp_http_router(router: Arc<McpRouter>, config: ServerConfig) -> R
         .clone()
         .unwrap_or_else(default_log_file_path);
 
+    let audit_logger = router.audit_logger().cloned();
     let state = McpHttpState {
         router,
         config: config.clone(),
         log_file_path: log_file,
+        audit_logger,
     };
 
     Router::new()
-        .merge(dashboard::create_dashboard_router(state.clone()))
+        .merge(dashboard::create_dashboard_router())
         .route("/", post(messages_handler))
         .route("/sse", get(sse_handler).post(messages_handler))
         .route("/messages", post(messages_handler).get(sse_handler))
         .route("/mcp", post(messages_handler).get(sse_handler))
         .route("/health", get(health_handler))
         .layer(cors)
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_layer,
+        ))
         .with_state(state)
 }
 
-/// Axum middleware that enforces authentication and RBAC roles on API requests
-pub async fn auth_middleware(
+/// Paths that stay reachable before authentication:
+/// - `OPTIONS` preflights (CORS)
+/// - the three HTML bootstrap routes — they render the login shell only and
+///   must never embed terminal/audit data (see `dashboard.rs`)
+/// - `GET /health` from loopback peers, so container HEALTHCHECKs keep
+///   working without credentials; `health_handler` minimizes the payload there
+fn is_auth_exempt(path: &str, method: &Method, peer_loopback: bool) -> bool {
+    if *method == Method::OPTIONS {
+        return true;
+    }
+    if matches!(path, "/" | "/dashboard" | "/index.html") {
+        return true;
+    }
+    if path == "/health" && peer_loopback {
+        return true;
+    }
+    false
+}
+
+/// Global authentication layer for every MCP/HTTP/dashboard route.
+///
+/// Replaces the three previously inline auth checks (health/sse/messages) and
+/// the per-nest `auth_middleware`. On success the resolved [`Role`] (and the
+/// raw token string, when present) are inserted into request extensions.
+///
+/// Dev fallback: requests without a credential are only accepted from
+/// loopback peers when the server runs without any configured credential
+/// (local development / `--host 127.0.0.1 --no-bootstrap`).
+///
+/// Requests driven without `ConnectInfo` (direct service calls in tests)
+/// default to the loopback policy.
+pub async fn auth_layer(
     State(state): State<McpHttpState>,
     mut req: Request,
     next: axum::middleware::Next,
 ) -> Response {
-    // OPTIONS preflight requests must pass through to CORS layer unhindered
-    if req.method() == axum::http::Method::OPTIONS {
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0);
+    let peer_loopback = peer.map(|addr| addr.ip().is_loopback()).unwrap_or(true);
+
+    if is_auth_exempt(req.uri().path(), req.method(), peer_loopback) {
         return next.run(req).await;
     }
 
-    let token_opt = extract_auth_token(req.headers(), req.uri().query());
+    let (token_opt, _source) = extract_credential(req.headers(), req.uri().query());
     let role_opt = match &token_opt {
-        Some(token) => state.config.get_role_for_token(token),
-        None => {
-            if state.config.auth_token.is_none() && state.config.roles.is_empty() {
-                Some(crate::config::Role::Admin)
-            } else {
-                None
-            }
+        Some(token) if state.config.has_credentials() => state.config.get_role_for_token(token),
+        _ if state.config.insecure_no_auth => Some(crate::config::Role::Admin),
+        _ if peer_loopback && !state.config.has_credentials() => {
+            Some(crate::config::Role::Admin)
         }
+        _ => None,
     };
 
     let role = match role_opt {
         Some(r) => r,
         None => {
+            audit_auth_failure(&state, token_opt.as_deref(), peer);
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "error": "Unauthorized: Invalid or missing authentication token" })),
@@ -170,8 +213,55 @@ pub async fn auth_middleware(
     next.run(req).await
 }
 
-/// Extracts raw authentication token from Authorization header, Cookie, or Query parameter
-pub fn extract_auth_token(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
+/// Records an AUTH_FAILED audit event. The token is always redacted to a
+/// three-character prefix; the plaintext never reaches the audit trail.
+fn audit_auth_failure(
+    state: &McpHttpState,
+    token: Option<&str>,
+    peer: Option<SocketAddr>,
+) {
+    let Some(logger) = &state.audit_logger else {
+        return;
+    };
+    logger.log(crate::audit::AuditRecord {
+        id: format!("audit-{}", crate::router::generate_call_id()),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        role: None,
+        token_prefix: token.map(crate::audit::AuditLogger::redact_token),
+        client_ip: peer.map(|addr| addr.to_string()),
+        terminal_id: None,
+        action: crate::audit::ACTION_AUTH_FAILED.to_string(),
+        tool_name: None,
+        arguments: None,
+        status: "DENIED".to_string(),
+        error: Some(
+            if token.is_some() {
+                "invalid credential"
+            } else {
+                "missing credential"
+            }
+            .to_string(),
+        ),
+        duration_ms: Some(0),
+    });
+}
+
+/// Where a request credential was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialSource {
+    Header,
+    Cookie,
+    Query,
+}
+
+/// Extracts the credential together with its source (header / cookie / query).
+///
+/// This is the single implementation of the extraction precedence; the
+/// F1-locked [`extract_auth_token`] delegates here so the two can never drift.
+pub fn extract_credential(
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> (Option<String>, Option<CredentialSource>) {
     // 1. Check Authorization: Bearer <token> or Authorization: <token>
     if let Some(auth_header) = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -184,10 +274,10 @@ pub fn extract_auth_token(headers: &HeaderMap, query: Option<&str>) -> Option<St
         {
             let t = clean[7..].trim();
             if !t.is_empty() {
-                return Some(t.to_string());
+                return (Some(t.to_string()), Some(CredentialSource::Header));
             }
         } else if !clean.is_empty() {
-            return Some(clean.to_string());
+            return (Some(clean.to_string()), Some(CredentialSource::Header));
         }
     }
 
@@ -201,7 +291,7 @@ pub fn extract_auth_token(headers: &HeaderMap, query: Option<&str>) -> Option<St
                 if k.eq_ignore_ascii_case("token") || k.eq_ignore_ascii_case("auth_token") {
                     let val = v.trim();
                     if !val.is_empty() {
-                        return Some(val.to_string());
+                        return (Some(val.to_string()), Some(CredentialSource::Cookie));
                     }
                 }
             }
@@ -216,29 +306,19 @@ pub fn extract_auth_token(headers: &HeaderMap, query: Option<&str>) -> Option<St
                     let decoded = percent_decode(v).unwrap_or_else(|| v.to_string());
                     let clean = decoded.trim();
                     if !clean.is_empty() {
-                        return Some(clean.to_string());
+                        return (Some(clean.to_string()), Some(CredentialSource::Query));
                     }
                 }
             }
         }
     }
 
-    None
+    (None, None)
 }
 
-/// Check request authentication using ServerConfig roles and auth_token
-pub fn is_request_authenticated(
-    config: &ServerConfig,
-    headers: &HeaderMap,
-    query: Option<&str>,
-) -> bool {
-    if config.auth_token.is_none() && config.roles.is_empty() {
-        return true;
-    }
-    match extract_auth_token(headers, query) {
-        Some(token) => config.get_role_for_token(&token).is_some(),
-        None => false,
-    }
+/// Extracts raw authentication token from Authorization header, Cookie, or Query parameter
+pub fn extract_auth_token(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
+    extract_credential(headers, query).0
 }
 
 fn percent_decode(input: &str) -> Option<String> {
@@ -261,14 +341,21 @@ fn percent_decode(input: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// Health check endpoint
+/// Health check endpoint.
+///
+/// The auth layer guarantees non-loopback peers only reach this handler with
+/// valid credentials. Loopback peers without credentials (e.g. the Docker
+/// HEALTHCHECK) get the minimal `{"status":"ok"}` payload — no version,
+/// ports or terminal counts leak to unauthenticated callers.
 async fn health_handler(State(state): State<McpHttpState>, req: Request) -> Response {
-    if !is_request_authenticated(&state.config, req.headers(), req.uri().query()) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Unauthorized: Invalid or missing authentication token" })),
-        )
-            .into_response();
+    let authed = extract_credential(req.headers(), req.uri().query())
+        .0
+        .as_deref()
+        .map(|token| state.config.get_role_for_token(token).is_some())
+        .unwrap_or(false);
+
+    if !authed {
+        return (StatusCode::OK, Json(json!({ "status": "ok" }))).into_response();
     }
 
     let terminals = state.router.list_terminals().await;
@@ -305,25 +392,10 @@ impl Stream for SseStream {
 }
 
 /// SSE connection handler (`GET /sse`)
-async fn sse_handler(
-    State(state): State<McpHttpState>,
-    req: Request,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, &'static str)> {
-    if !is_request_authenticated(&state.config, req.headers(), req.uri().query()) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            "Unauthorized: Invalid or missing token",
-        ));
-    }
-
+async fn sse_handler() -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, &'static str)> {
     let (tx, rx) = mpsc::channel::<Event>(32);
 
-    let token_param = if let Some(token) = &state.config.auth_token {
-        format!("?token={}", token)
-    } else {
-        String::new()
-    };
-    let endpoint_uri = format!("/messages{}", token_param);
+    let endpoint_uri = format!("/messages");
     let initial_event = Event::default().event("endpoint").data(endpoint_uri);
     let _ = tx.send(initial_event).await;
 
@@ -333,43 +405,25 @@ async fn sse_handler(
 
 /// JSON-RPC message handler (`POST /messages`)
 async fn messages_handler(State(state): State<McpHttpState>, req: Request) -> Response {
-    let token_opt = extract_auth_token(req.headers(), req.uri().query());
-    let role = match &token_opt {
-        Some(token) => match state.config.get_role_for_token(token) {
-            Some(r) => r,
-            None => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({
-                        "jsonrpc": "2.0",
-                        "error": {
-                            "code": -32000,
-                            "message": "Unauthorized: Invalid token"
-                        }
-                    })),
-                )
-                    .into_response();
-            }
-        },
-        None => {
-            if state.config.auth_token.is_none() && state.config.roles.is_empty() {
-                crate::config::Role::Admin
-            } else {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({
-                        "jsonrpc": "2.0",
-                        "error": {
-                            "code": -32000,
-                            "message": "Unauthorized: Invalid or missing token"
-                        }
-                    })),
-                )
-                    .into_response();
-            }
-        }
+    // Authentication and role resolution happen in `auth_layer`, which always
+    // inserts the resolved Role extension for non-exempt routes. A missing
+    // extension here means the router was assembled without the layer —
+    // fail closed rather than defaulting to a privileged role.
+    let Some(role) = req.extensions().get::<crate::config::Role>().copied() else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32000,
+                    "message": "Unauthorized: Invalid or missing token"
+                }
+            })),
+        )
+            .into_response();
     };
 
+    let token_opt = extract_auth_token(req.headers(), req.uri().query());
     let token_prefix = token_opt
         .as_deref()
         .map(crate::audit::AuditLogger::redact_token);

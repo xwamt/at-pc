@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, Level};
 
-use at_pc_server::config::ServerConfig;
+use at_pc_server::bootstrap;
+use at_pc_server::config::{self, ServerConfig};
 use at_pc_server::mcp::run_stdio_server;
 use at_pc_server::router::McpRouter;
 use at_pc_server::ws::{start_ws_server_with_state, TerminalRegistry, WsServerState};
@@ -11,11 +12,20 @@ use at_pc_server::{
     start_mcp_http_server_with_shutdown,
 };
 
+/// CLI arguments for server bootstrap and authentication gate
+#[derive(Debug, Clone, Default)]
+pub struct Args {
+    /// Disable first-boot root API key bootstrap
+    pub no_bootstrap: bool,
+    /// Opt out of authentication gate (allow non-loopback without credentials)
+    pub insecure_no_auth: bool,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let args: Vec<String> = std::env::args().collect();
+    let raw_args: Vec<String> = std::env::args().collect();
 
     // Check for help flag
-    if args.iter().any(|a| a == "--help" || a == "-h") {
+    if raw_args.iter().any(|a| a == "--help" || a == "-h") {
         println!("at-pc-server v{}", env!("CARGO_PKG_VERSION"));
         println!("Central Gateway & MCP Router for Multi-Terminal PC Assistance\n");
         println!("USAGE:");
@@ -34,21 +44,25 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!(
             "    --log-file <PATH>     Path to server runtime log file (default: at-pc-server.log)"
         );
+        println!("    --no-bootstrap        Disable first-boot root API key bootstrap");
+        println!(
+            "    --insecure-no-auth    Opt out of authentication gate (allow non-loopback without credentials)"
+        );
         println!("    --stdio               Run MCP server in stdio mode (for local IDE / Cursor)");
         println!("    --no-tray             Run without system tray icon in console mode");
         println!("    -h, --help            Print help information");
         return Ok(());
     }
 
-    let stdio_mode = args.iter().any(|a| a == "--stdio");
+    let stdio_mode = raw_args.iter().any(|a| a == "--stdio");
 
     // Configure logging (if in stdio mode, log to stderr only to avoid corrupting stdio JSON-RPC)
     let mut custom_log_file = std::env::var("AT_PC_LOG_FILE")
         .ok()
         .map(std::path::PathBuf::from);
-    for i in 0..args.len() {
-        if args[i] == "--log-file" && i + 1 < args.len() {
-            custom_log_file = Some(std::path::PathBuf::from(&args[i + 1]));
+    for i in 0..raw_args.len() {
+        if raw_args[i] == "--log-file" && i + 1 < raw_args.len() {
+            custom_log_file = Some(std::path::PathBuf::from(&raw_args[i + 1]));
         }
     }
     let log_file_path = custom_log_file.unwrap_or_else(at_pc_server::mcp::default_log_file_path);
@@ -104,9 +118,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut config = ServerConfig::default();
 
     // Check for explicit --config or default search paths
-    let explicit_config = (0..args.len())
-        .find(|&i| args[i] == "--config" && i + 1 < args.len())
-        .map(|i| std::path::PathBuf::from(&args[i + 1]));
+    let explicit_config = (0..raw_args.len())
+        .find(|&i| raw_args[i] == "--config" && i + 1 < raw_args.len())
+        .map(|i| std::path::PathBuf::from(&raw_args[i + 1]));
 
     if let Some(path) = explicit_config {
         match ServerConfig::from_file(&path) {
@@ -152,45 +166,84 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // Override with CLI flags
-    for i in 0..args.len() {
-        if args[i] == "--host" && i + 1 < args.len() {
-            config.listen_host = args[i + 1].clone();
+    for i in 0..raw_args.len() {
+        if raw_args[i] == "--host" && i + 1 < raw_args.len() {
+            config.listen_host = raw_args[i + 1].clone();
         }
-        if args[i] == "--ws-port" && i + 1 < args.len() {
-            if let Ok(p) = args[i + 1].parse::<u16>() {
+        if raw_args[i] == "--ws-port" && i + 1 < raw_args.len() {
+            if let Ok(p) = raw_args[i + 1].parse::<u16>() {
                 config.ws_port = p;
             }
         }
-        if args[i] == "--mcp-port" && i + 1 < args.len() {
-            if let Ok(p) = args[i + 1].parse::<u16>() {
+        if raw_args[i] == "--mcp-port" && i + 1 < raw_args.len() {
+            if let Ok(p) = raw_args[i + 1].parse::<u16>() {
                 config.mcp_port = p;
             }
         }
-        if args[i] == "--meta-file" && i + 1 < args.len() {
-            config.meta_store_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        if raw_args[i] == "--meta-file" && i + 1 < raw_args.len() {
+            config.meta_store_path = Some(std::path::PathBuf::from(&raw_args[i + 1]));
         }
-        if args[i] == "--auth-token" && i + 1 < args.len() {
-            config.auth_token = Some(args[i + 1].clone());
+        if raw_args[i] == "--auth-token" && i + 1 < raw_args.len() {
+            config.auth_token = Some(raw_args[i + 1].clone());
         }
-        if args[i] == "--tls-cert" && i + 1 < args.len() {
-            config.tls_cert_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        if raw_args[i] == "--tls-cert" && i + 1 < raw_args.len() {
+            config.tls_cert_path = Some(std::path::PathBuf::from(&raw_args[i + 1]));
         }
-        if args[i] == "--tls-key" && i + 1 < args.len() {
-            config.tls_key_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        if raw_args[i] == "--tls-key" && i + 1 < raw_args.len() {
+            config.tls_key_path = Some(std::path::PathBuf::from(&raw_args[i + 1]));
         }
-        if args[i] == "--tls-ca" && i + 1 < args.len() {
-            config.tls_client_ca_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        if raw_args[i] == "--tls-ca" && i + 1 < raw_args.len() {
+            config.tls_client_ca_path = Some(std::path::PathBuf::from(&raw_args[i + 1]));
         }
-        if args[i] == "--audit-file" && i + 1 < args.len() {
-            config.audit_log_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        if raw_args[i] == "--audit-file" && i + 1 < raw_args.len() {
+            config.audit_log_path = Some(std::path::PathBuf::from(&raw_args[i + 1]));
         }
-        if args[i] == "--log-file" && i + 1 < args.len() {
-            config.log_file_path = Some(std::path::PathBuf::from(&args[i + 1]));
+        if raw_args[i] == "--log-file" && i + 1 < raw_args.len() {
+            config.log_file_path = Some(std::path::PathBuf::from(&raw_args[i + 1]));
         }
     }
 
+    let args = Args {
+        no_bootstrap: raw_args.iter().any(|a| a == "--no-bootstrap"),
+        insecure_no_auth: raw_args.iter().any(|a| a == "--insecure-no-auth"),
+    };
+
+    config.bootstrap_disabled = args.no_bootstrap;
+    config.insecure_no_auth = args.insecure_no_auth;
+
+    if !config.bootstrap_disabled {
+        let data_dir = config::default_data_dir();
+        match bootstrap::ensure_bootstrap_key(&data_dir) {
+            Ok(bootstrap::BootstrapOutcome::Generated(ref key)) => {
+                bootstrap::print_bootstrap_banner(key);
+                config.auth_token = Some(key.clone());
+            }
+            Ok(bootstrap::BootstrapOutcome::Existing(ref key)) => {
+                if !config.has_credentials() {
+                    config.auth_token = Some(key.clone());
+                }
+            }
+            Err(e) => {
+                error!("Failed to ensure bootstrap key: {e}");
+            }
+        }
+    }
+
+    if let Err(e) = config::validate_boot_gate(
+        &config,
+        config.has_credentials(),
+        config.insecure_no_auth,
+    ) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+
+    if config.insecure_no_auth {
+        tracing::warn!("--insecure-no-auth is active: server is running in unauthenticated mode!");
+    }
+
     #[cfg(feature = "tray")]
-    let enable_tray = at_pc_server::tray::should_enable_tray(&args);
+    let enable_tray = at_pc_server::tray::should_enable_tray(&raw_args);
     #[cfg(not(feature = "tray"))]
     let enable_tray = false;
 

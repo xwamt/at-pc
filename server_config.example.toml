@@ -12,6 +12,8 @@ ws_path = "/ws"
 mcp_port = 9800
 
 # 全局默认连接鉴权 Token (留空则不开启默认 Token 验证)
+# [legacy] 明文 auth_token 已弃用：新版密钥由 server 首启自动生成 / 控制台管理。
+#          此处仅为兼容旧配置保留，优先级低于首启生成的 API Key 门禁凭据。
 # auth_token = "admin-secret-token"
 
 # CORS 跨域允许来源白名单 (为空时仅允许基础同源与内置 Dashboard)

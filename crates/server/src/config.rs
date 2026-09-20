@@ -123,6 +123,17 @@ pub struct ServerConfig {
     /// Optional path for the server runtime log file (default: "at-pc-server.log")
     #[serde(default)]
     pub log_file_path: Option<PathBuf>,
+    /// Disable the first-boot root API key bootstrap (`--no-bootstrap`).
+    #[serde(default)]
+    pub bootstrap_disabled: bool,
+    /// Explicitly opt out of the authentication boot gate (`--insecure-no-auth`).
+    /// NOT recommended: every endpoint becomes reachable without credentials.
+    #[serde(default)]
+    pub insecure_no_auth: bool,
+    /// Allow non-TLS plaintext transport on non-loopback listeners (`--allow-plaintext`).
+    /// Placeholder for the M3 hardening gate; read but not yet enforced in M0.
+    #[serde(default)]
+    pub allow_plaintext: bool,
 }
 
 impl Default for ServerConfig {
@@ -144,6 +155,9 @@ impl Default for ServerConfig {
             roles: HashMap::new(),
             audit_log_path: default_audit_log_path(),
             log_file_path: None,
+            bootstrap_disabled: false,
+            insecure_no_auth: false,
+            allow_plaintext: false,
         }
     }
 }
@@ -164,6 +178,18 @@ impl ServerConfig {
     /// Checks if TLS transport encryption is configured and active
     pub fn is_tls_enabled(&self) -> bool {
         self.tls_cert_path.is_some() && self.tls_key_path.is_some()
+    }
+
+    /// True when at least one credential (auth_token or a [roles] entry) is
+    /// configured. This is the precondition the boot gate checks before
+    /// allowing a non-loopback listener to start.
+    pub fn has_credentials(&self) -> bool {
+        let has_primary = self
+            .auth_token
+            .as_deref()
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false);
+        has_primary || !self.roles.is_empty()
     }
 
     /// Resolves the RBAC role associated with an authentication token
@@ -192,4 +218,70 @@ impl ServerConfig {
 
         None
     }
+}
+
+/// True if the listen host only accepts loopback-origin connections
+/// (`127.0.0.0/8`, `::1`, or the literal name `localhost`).
+///
+/// `0.0.0.0` / `::` (unspecified / all interfaces) are NOT loopback: a server
+/// bound to them is reachable from the network and therefore gated.
+pub fn is_loopback(host: &str) -> bool {
+    let trimmed = host.trim();
+    if trimmed.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match trimmed.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip.is_loopback(),
+        Err(_) => false,
+    }
+}
+
+/// Why the boot gate refused to start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootGateError {
+    /// Non-loopback listener without any credential configured.
+    MissingCredentials { host: String },
+}
+
+impl std::fmt::Display for BootGateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BootGateError::MissingCredentials { host } => write!(
+                f,
+                "refusing to start: listening on non-loopback host '{host}' without any credential configured.\n\
+                 Solutions:\n\
+                 \x20 1. Remove --no-bootstrap so the server generates a root API key on first boot\n\
+                 \x20    (printed once on stdout and stored in <data_dir>/bootstrap_key.txt, mode 0600)\n\
+                 \x20 2. Provide a credential via --auth-token or [roles] in the config file\n\
+                 \x20 3. Bind a loopback interface instead: --host 127.0.0.1 (local development)\n\
+                 \x20 4. Explicitly opt out with --insecure-no-auth (NOT recommended: every endpoint is exposed)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BootGateError {}
+
+/// Startup gate: a non-loopback listener must not boot without credentials.
+///
+/// The loopback exemption keeps the local development experience (`--host
+/// 127.0.0.1` + `--no-bootstrap` = open dev mode); anything reachable from the
+/// network requires either a credential or the explicit insecure opt-out.
+pub fn validate_boot_gate(
+    cfg: &ServerConfig,
+    has_creds: bool,
+    insecure_no_auth: bool,
+) -> Result<(), BootGateError> {
+    if insecure_no_auth {
+        return Ok(());
+    }
+    if has_creds {
+        return Ok(());
+    }
+    if is_loopback(&cfg.listen_host) {
+        return Ok(());
+    }
+    Err(BootGateError::MissingCredentials {
+        host: cfg.listen_host.clone(),
+    })
 }

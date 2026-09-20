@@ -35,6 +35,7 @@ rustls-pemfile = { workspace = true }
 rustls-pki-types = { workspace = true }
 axum-server = { workspace = true }
 same-file = { workspace = true }
+getrandom = { workspace = true }
 tray-icon = { workspace = true, optional = true }
 muda = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }

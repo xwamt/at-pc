@@ -21,7 +21,7 @@ COPY --from=server-builder /app/target/release/at-pc-server /usr/local/bin/at-pc
 COPY server_config.example.toml /etc/at-pc/server_config.toml
 
 ENV AT_PC_DATA_DIR=/var/lib/at-pc \
-    AT_PC_LOG_DIR=/var/log/at-pc
+    AT_PC_LOG_FILE=/var/log/at-pc/at-pc-server.log
 
 EXPOSE 9800 9801
 

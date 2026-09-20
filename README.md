@@ -12,7 +12,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)]()
 [![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue.svg)](#-开源协议)
 
-[特性总览](#-核心特性) • [系统架构](#-系统架构) • [快速上手](#-快速上手指南) • [MCP 工具矩阵](#-mcp-工具矩阵39-项) • [配置说明](#-配置指南) • [性能指标](#-性能工程与硬门禁) • [安全机制](#-企业级安全体系) • [制品下载](#-发布制品清单)
+[特性总览](#-核心特性) • [系统架构](#-系统架构) • [快速上手](#-快速上手指南) • [MCP 工具矩阵](#-mcp-工具矩阵39-项) • [配置说明](#-配置指南) • [性能指标](#-性能工程与硬门禁) • [门禁与首启密钥](#-门禁与首启密钥) • [安全机制](#-企业级安全体系) • [制品下载](#-发布制品清单)
 
 </div>
 
@@ -312,6 +312,41 @@ AT-PC 在工程落地中推行极致的性能标准，并设立了由 CI 硬性�
 | **高频进程列表检索响应** | 无缓存 70.4 ms | **5.4 ms**（1000ms TTL 热命中） | ⚡ **13.0x ~ 15.2x 提速** |
 | **macOS 活动窗口元数据提取**| AppleScript ~150 ms | **0.26 ms**（原生 Cocoa API） | 🏎️ **微秒级响应** |
 | **5000+ 终端元数据更新时延**| O(n) 锁竞争 45 ms | **< 15 µs**（`Arc/COW` 无锁快照） | 📈 **支持企业级超大规模集群** |
+
+---
+
+## 🔑 门禁与首启密钥
+
+服务端自 v1.x 起内置 **API Key 门禁**：非回环监听（如 `--host 0.0.0.0`）+ 无凭据时，服务**拒绝启动**。`/health` 对回环来源免凭据，本地开发无影响。
+
+### ① 首启自动生成 root key
+
+首次启动（数据目录内无 `bootstrap_key.txt`）时，server 自动生成 root API Key，格式为 `atpc_sk_<8字符ID>_<43字符secret>`，并通过**两个通道**提供给运维：
+
+- **启动日志（stdout / `docker logs at-pc-server`）**：首启时直接打印，前缀为 `atpc_sk_`。
+- **文件落盘**：写入 `<data_dir>/bootstrap_key.txt`，权限 `0600`。
+
+建议**抄录 key 后即删除该文件**，避免长期明文留存：
+
+```bash
+# 查看（仅 root 可读）
+sudo cat /var/lib/at-pc/bootstrap_key.txt
+# 抄录后删除
+sudo rm /var/lib/at-pc/bootstrap_key.txt
+```
+
+### ② 数据目录持久化语义（Docker）
+
+容器启动参数由 `docker-compose.yml` 自动探测 `/etc/at-pc/server_config.toml`（即 compose 挂载的文件）。
+
+- 具名卷 `at-pc-data`（挂载到 `/var/lib/at-pc`）**保留** → 不会重新 bootstrap，沿用既有 key；
+- **删除该卷**（`docker compose down -v` 或手动删 `at-pc-data`）→ 旧 key 全部失效，下次启动重新首启生成新 root key。
+
+### ③ 本地开发如何免门禁
+
+- **完全免门禁（开放态）**：`--host 127.0.0.1 --no-bootstrap`（回环监听 + 无凭据 = 开放态）。
+- **公网部署无凭据**：直接拒绝启动，需提供首启生成的 key。
+- **显式豁免（不建议）**：`--insecure-no-auth` 可强制关闭门禁，仅限隔离测试环境。
 
 ---
 

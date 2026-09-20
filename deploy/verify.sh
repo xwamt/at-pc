@@ -40,8 +40,14 @@ check_health_json() {
 check_step "Verify Health JSON status == 'ok'" check_health_json
 
 # 3. Verify MCP SSE Endpoint
+# 若定义了 AT_PC_TOKEN，则对 /sse 检查携带 Bearer 凭据（门禁开启时必需）。
+# 未定义 AT_PC_TOKEN 时行为保持现状（本地开发态仍全过）。
 check_sse() {
-    curl -sf -I "http://${SERVER_HOST}:${MCP_PORT}/sse" | grep -qi "text/event-stream"
+    local auth_args=()
+    if [ -n "${AT_PC_TOKEN:-}" ]; then
+        auth_args=(-H "Authorization: Bearer ${AT_PC_TOKEN}")
+    fi
+    curl -sf -I "${auth_args[@]}" "http://${SERVER_HOST}:${MCP_PORT}/sse" | grep -qi "text/event-stream"
 }
 check_step "MCP SSE Stream Endpoint (/sse on port ${MCP_PORT})" check_sse
 

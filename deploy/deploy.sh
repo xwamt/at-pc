@@ -102,6 +102,9 @@ deploy_standalone() {
         --host 0.0.0.0 \
         --ws-port 9801 \
         --mcp-port 9800 \
+        --config /etc/at-pc/server_config.toml \
+        --meta-file /var/lib/at-pc/terminals_meta.json \
+        --audit-file /var/log/at-pc/audit.jsonl \
         --log-file /var/log/at-pc/at-pc-server.log \
         > /dev/null 2>&1 &
 

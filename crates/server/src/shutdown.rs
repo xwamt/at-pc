@@ -94,7 +94,13 @@ pub async fn serve_with_graceful_shutdown(
         let _ = fired_tx.send(());
     });
 
-    let serve = axum::serve(listener, app).with_graceful_shutdown(async {
+    // into_make_service_with_connect_info lets handlers and the auth layer
+    // read the peer address (loopback exemption for /health, AUTH_FAILED audits).
+    let serve = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
         let _ = graceful_rx.await;
     });
 
@@ -170,7 +176,7 @@ pub async fn start_mcp_http_server_with_shutdown(
         });
         axum_server::from_tcp_rustls(std_listener, rustls_config)
             .handle(handle)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .await?;
     } else {
         info!("MCP HTTP/SSE gateway listening on http://{}:{}", host, port);

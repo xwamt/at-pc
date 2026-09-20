@@ -47,8 +47,14 @@ pub fn get_dashboard_html() -> Cow<'static, str> {
     Cow::Borrowed(DASHBOARD_HTML)
 }
 
-/// Create dashboard sub-router
-pub fn create_dashboard_router(state: McpHttpState) -> Router<McpHttpState> {
+/// Create dashboard sub-router.
+///
+/// Route authentication is enforced by the single global `auth_layer` on the
+/// merged router (see `mcp/mod.rs`). The three HTML routes below are on that
+/// layer's exemption list: they must stay reachable so a browser can load the
+/// console before possessing a key. They return ONLY the login shell — never
+/// embed terminal, audit or key data into this HTML.
+pub fn create_dashboard_router() -> Router<McpHttpState> {
     let api_routes = Router::new()
         .route("/logs", get(api_get_logs))
         .route("/audit/export", get(api_export_audit_logs))
@@ -75,20 +81,13 @@ pub fn create_dashboard_router(state: McpHttpState) -> Router<McpHttpState> {
             post(api_cancel_terminal_call),
         )
         .route("/calls", get(api_list_pending_calls))
-        .route("/calls/:id/cancel", post(api_cancel_call))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            super::auth_middleware,
-        ));
+        .route("/calls/:id/cancel", post(api_cancel_call));
 
-    let static_routes = Router::new()
-        .route("/*path", get(static_asset_handler))
-        .layer(axum::middleware::from_fn_with_state(
-            state,
-            super::auth_middleware,
-        ));
+    let static_routes = Router::new().route("/*path", get(static_asset_handler));
 
     Router::new()
+        // Auth-exempt login shell routes (see the doc comment above): the
+        // response is static HTML with no embedded data.
         .route("/", get(dashboard_html_handler))
         .route("/dashboard", get(dashboard_html_handler))
         .route("/index.html", get(dashboard_html_handler))

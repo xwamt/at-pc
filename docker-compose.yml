@@ -9,6 +9,9 @@ services:
     container_name: at-pc-server
     restart: always
     ports:
+      # 门禁已默认开启：首启 root key 见 `docker logs at-pc-server`（atpc_sk_ 前缀），
+      # 以及具名卷 at-pc-data 内的 /var/lib/at-pc/bootstrap_key.txt。
+      # 以下两行将端口发布到 0.0.0.0，确认你确实需要开放公网访问再保留。
       - "9800:9800" # MCP HTTP / SSE & Web Management Console
       - "9801:9801" # Agent WebSocket Gateway
     volumes:

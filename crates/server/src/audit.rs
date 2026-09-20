@@ -23,6 +23,13 @@ const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const DEFAULT_RETAIN_FILES: usize = 5;
 
+/// Audit action: a request was rejected by the auth layer (invalid or missing
+/// credential). `token_prefix` carries the redacted three-char prefix.
+pub const ACTION_AUTH_FAILED: &str = "AUTH_FAILED";
+/// Audit action: the server was started with `--insecure-no-auth` and is
+/// accepting unauthenticated access on a non-loopback listener.
+pub const ACTION_INSECURE_MODE: &str = "insecure_mode";
+
 type AuditResult = Result<(), String>;
 
 struct WriterRuntime {
