@@ -6,6 +6,7 @@ pub mod router;
 pub mod shutdown;
 pub(crate) mod tail;
 pub mod tls;
+pub mod tray;
 pub mod ws;
 
 pub use audit::{AuditLogger, AuditRecord};
