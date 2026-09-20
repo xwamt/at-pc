@@ -152,7 +152,7 @@ fn test_server_config_defaults() {
     assert_eq!(config.mcp_port, 9800);
     assert_eq!(config.heartbeat_interval_secs, 5);
     assert_eq!(config.offline_threshold_secs, 15);
-    assert_eq!(config.listen_host, "127.0.0.1");
+    assert_eq!(config.listen_host, "0.0.0.0");
     assert!(config.allowed_origins.is_empty());
     assert!(config.auth_token.is_none());
 }

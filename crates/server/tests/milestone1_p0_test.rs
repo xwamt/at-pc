@@ -121,9 +121,9 @@ async fn test_p0_2_cors_policy_restricted_and_allowlist() {
     let registry = Arc::new(TerminalRegistry::new());
     let router = Arc::new(McpRouter::new(registry));
 
-    // 1. Default config has listen_host = 127.0.0.1 and restricted CORS
+    // 1. Default config has listen_host = 0.0.0.0 and restricted CORS
     let default_cfg = ServerConfig::default();
-    assert_eq!(default_cfg.listen_host, "127.0.0.1");
+    assert_eq!(default_cfg.listen_host, "0.0.0.0");
     assert!(default_cfg.allowed_origins.is_empty());
 
     let app_default = create_mcp_http_router(router.clone(), default_cfg);

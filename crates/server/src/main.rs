@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("OPTIONS:");
         println!("    --config <PATH>       Path to TOML configuration file");
         println!("    --meta-file <PATH>    Path to JSON terminal metadata file");
-        println!("    --host <HOST>         Listen host address (default: 127.0.0.1)");
+        println!("    --host <HOST>         Listen host address (default: 0.0.0.0)");
         println!("    --ws-port <PORT>      WebSocket listen port (default: 9801)");
         println!("    --mcp-port <PORT>     MCP HTTP/SSE listen port (default: 9800)");
         println!("    --auth-token <TOKEN>  Authentication token for agent registration");

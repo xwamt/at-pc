@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn default_listen_host() -> String {
-    "127.0.0.1".to_string()
+    "0.0.0.0".to_string()
 }
 
 fn default_audit_log_path() -> Option<PathBuf> {
@@ -43,7 +43,7 @@ pub fn is_tool_allowed_for_role(role: Role, tool_name: &str) -> bool {
 /// Configuration for the centralized at-pc server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
-    /// Host address to listen on (default: "127.0.0.1")
+    /// Host address to listen on (default: "0.0.0.0")
     #[serde(default = "default_listen_host")]
     pub listen_host: String,
     /// Port for WebSocket server (default: 9801)
@@ -86,7 +86,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            listen_host: "127.0.0.1".to_string(),
+            listen_host: "0.0.0.0".to_string(),
             ws_port: 9801,
             ws_path: "/ws".to_string(),
             mcp_port: 9800,
