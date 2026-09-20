@@ -225,8 +225,11 @@ async fn run_gui(config: AgentConfig) -> Result<(), Box<dyn std::error::Error + 
         config.enable_computer_use
     );
 
-    let state =
-        Arc::new(AgentAppState::new(server_url.clone()).with_terminal_info(terminal_info.clone()));
+    let state = Arc::new(
+        AgentAppState::new(server_url.clone())
+            .with_terminal_info(terminal_info.clone())
+            .with_runtime_handle(tokio::runtime::Handle::current()),
+    );
 
     state.add_audit_log(
         "agent_startup",

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::executor::AgentExecutor;
@@ -85,6 +85,7 @@ pub struct AgentWsClient {
     pub insecure_skip_verify: bool,
     outbound_tx: Arc<RwLock<Option<mpsc::UnboundedSender<AgentToServerMessage>>>>,
     loop_lock: Arc<Mutex<()>>,
+    reconnect_notify: Arc<Notify>,
     input_tx: mpsc::UnboundedSender<at_pc_protocol::models::DesktopInputEvent>,
 }
 
@@ -125,6 +126,7 @@ impl AgentWsClient {
             insecure_skip_verify: false,
             outbound_tx: Arc::new(RwLock::new(None)),
             loop_lock: Arc::new(Mutex::new(())),
+            reconnect_notify: Arc::new(Notify::new()),
             input_tx,
         }
     }
@@ -180,8 +182,11 @@ impl AgentWsClient {
 
     /// Updates target server URL for future connection attempts
     pub async fn set_server_url(&self, new_url: String) {
-        let mut guard = self.server_url.write().await;
-        *guard = new_url;
+        {
+            let mut guard = self.server_url.write().await;
+            *guard = new_url;
+        }
+        self.reconnect_notify.notify_waiters();
     }
 
     /// Gets current connection status
@@ -237,6 +242,12 @@ impl AgentWsClient {
             });
         }
         self.stream_controller.stop();
+        self.reconnect_notify.notify_waiters();
+    }
+
+    /// Explicitly notifies the reconnect loop to attempt connection immediately without waiting for backoff timer
+    pub fn notify_reconnect(&self) {
+        self.reconnect_notify.notify_waiters();
     }
 
     /// Main connection and reconnect loop
@@ -255,7 +266,12 @@ impl AgentWsClient {
                 Ok(res) => res,
                 Err(e) => {
                     error!("Invalid server URL '{}': {}", current_url, e);
-                    tokio::time::sleep(Duration::from_secs(self.reconnect_interval_secs)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(self.reconnect_interval_secs)) => {}
+                        _ = self.reconnect_notify.notified() => {
+                            info!("Immediate retry triggered by configuration change");
+                        }
+                    }
                     continue;
                 }
             };
@@ -274,58 +290,69 @@ impl AgentWsClient {
                 format!("{}:9801", host)
             };
 
-            match tokio::time::timeout(connect_timeout, TcpStream::connect(&connect_addr)).await {
-                Ok(Ok(stream)) => {
-                    info!("Connected to server TCP. Performing WebSocket handshake...");
-                    let res = if is_tls {
-                        let host_no_port = host.split(':').next().unwrap_or(&host);
-                        match rustls_pki_types::ServerName::try_from(host_no_port.to_string()) {
-                            Ok(server_name) => {
-                                match crate::tls::create_tls_connector(
-                                    self.ca_cert_path.as_deref(),
-                                    self.client_cert_path.as_deref(),
-                                    self.client_key_path.as_deref(),
-                                    self.insecure_skip_verify,
-                                ) {
-                                    Ok(connector) => {
-                                        match connector.connect(server_name, stream).await {
-                                            Ok(tls_stream) => {
-                                                self.handshake_and_run_stream(
-                                                    tls_stream, &host, &path,
-                                                )
-                                                .await
-                                            }
-                                            Err(e) => Err(format!(
-                                                "TLS handshake failed with {}: {}",
-                                                host_no_port, e
-                                            )),
-                                        }
-                                    }
-                                    Err(e) => Err(format!("Failed to build TLS connector: {}", e)),
-                                }
-                            }
-                            Err(e) => Err(format!(
-                                "Invalid DNS/IP server name '{}': {}",
-                                host_no_port, e
-                            )),
-                        }
-                    } else {
-                        self.handshake_and_run_stream(stream, &host, &path).await
-                    };
+            let connect_fut = tokio::time::timeout(connect_timeout, TcpStream::connect(&connect_addr));
+            let tcp_result = tokio::select! {
+                res = connect_fut => Some(res),
+                _ = self.reconnect_notify.notified() => {
+                    info!("Connection attempt interrupted by config change; retrying with updated target...");
+                    None
+                }
+            };
 
-                    if let Err(e) = res {
-                        warn!("Agent session ended with error: {}", e);
+            if let Some(res) = tcp_result {
+                match res {
+                    Ok(Ok(stream)) => {
+                        info!("Connected to server TCP. Performing WebSocket handshake...");
+                        let res = if is_tls {
+                            let host_no_port = host.split(':').next().unwrap_or(&host);
+                            match rustls_pki_types::ServerName::try_from(host_no_port.to_string()) {
+                                Ok(server_name) => {
+                                    match crate::tls::create_tls_connector(
+                                        self.ca_cert_path.as_deref(),
+                                        self.client_cert_path.as_deref(),
+                                        self.client_key_path.as_deref(),
+                                        self.insecure_skip_verify,
+                                    ) {
+                                        Ok(connector) => {
+                                            match connector.connect(server_name, stream).await {
+                                                Ok(tls_stream) => {
+                                                    self.handshake_and_run_stream(
+                                                        tls_stream, &host, &path,
+                                                    )
+                                                    .await
+                                                }
+                                                Err(e) => Err(format!(
+                                                    "TLS handshake failed with {}: {}",
+                                                    host_no_port, e
+                                                )),
+                                            }
+                                        }
+                                        Err(e) => Err(format!("Failed to build TLS connector: {}", e)),
+                                    }
+                                }
+                                Err(e) => Err(format!(
+                                    "Invalid DNS/IP server name '{}': {}",
+                                    host_no_port, e
+                                )),
+                            }
+                        } else {
+                            self.handshake_and_run_stream(stream, &host, &path).await
+                        };
+
+                        if let Err(e) = res {
+                            warn!("Agent session ended with error: {}", e);
+                        }
                     }
-                }
-                Ok(Err(e)) => {
-                    warn!("Failed to connect to server at {}: {}", connect_addr, e);
-                }
-                Err(_) => {
-                    warn!(
-                        "Connection to server at {} timed out after {}s",
-                        connect_addr,
-                        connect_timeout.as_secs()
-                    );
+                    Ok(Err(e)) => {
+                        warn!("Failed to connect to server at {}: {}", connect_addr, e);
+                    }
+                    Err(_) => {
+                        warn!(
+                            "Connection to server at {} timed out after {}s",
+                            connect_addr,
+                            connect_timeout.as_secs()
+                        );
+                    }
                 }
             }
 
@@ -338,7 +365,12 @@ impl AgentWsClient {
                 "Reconnecting in {} seconds...",
                 self.reconnect_interval_secs
             );
-            tokio::time::sleep(Duration::from_secs(self.reconnect_interval_secs)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(self.reconnect_interval_secs)) => {}
+                _ = self.reconnect_notify.notified() => {
+                    info!("Immediate reconnect triggered by user or configuration change");
+                }
+            }
         }
 
         self.set_status(ClientConnectionStatus::Disconnected).await;

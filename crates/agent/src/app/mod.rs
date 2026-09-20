@@ -35,12 +35,14 @@ pub struct AgentAppState {
     is_stopped: Arc<AtomicBool>,
     audit_logs: Arc<RwLock<Vec<AgentAuditLog>>>,
     ws_client: Arc<RwLock<Option<Arc<AgentWsClient>>>>,
+    tokio_handle: Arc<RwLock<Option<tokio::runtime::Handle>>>,
 }
 
 impl AgentAppState {
     /// Creates a new `AgentAppState` instance with server URL.
     pub fn new(server_url: String) -> Self {
         let default_info = AgentConfig::default().to_terminal_info();
+        let handle = tokio::runtime::Handle::try_current().ok();
         Self {
             server_url: Arc::new(RwLock::new(server_url)),
             terminal_info: Arc::new(RwLock::new(default_info)),
@@ -48,6 +50,33 @@ impl AgentAppState {
             is_stopped: Arc::new(AtomicBool::new(false)),
             audit_logs: Arc::new(RwLock::new(Vec::new())),
             ws_client: Arc::new(RwLock::new(None)),
+            tokio_handle: Arc::new(RwLock::new(handle)),
+        }
+    }
+
+    /// Explicitly attaches a Tokio runtime handle to the state.
+    pub fn with_runtime_handle(self, handle: tokio::runtime::Handle) -> Self {
+        {
+            let mut guard = self.tokio_handle.write().unwrap();
+            *guard = Some(handle);
+        }
+        self
+    }
+
+    /// Spawns a future on the stored or ambient Tokio runtime handle.
+    pub fn spawn_async<F>(&self, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let handle_opt = {
+            let guard = self.tokio_handle.read().unwrap();
+            guard.clone().or_else(|| tokio::runtime::Handle::try_current().ok())
+        };
+
+        if let Some(handle) = handle_opt {
+            handle.spawn(future);
+        } else {
+            tracing::warn!("Failed to spawn async task: no Tokio runtime handle available");
         }
     }
 
@@ -153,13 +182,11 @@ impl AgentAppState {
             let executor = client.executor.clone();
             executor.kill_all_processes();
 
-            if tokio::runtime::Handle::try_current().is_ok() {
-                tokio::spawn(async move {
-                    client
-                        .disconnect("Emergency disconnect triggered by user in Agent UI")
-                        .await;
-                });
-            }
+            self.spawn_async(async move {
+                client
+                    .disconnect("Emergency disconnect triggered by user in Agent UI")
+                    .await;
+            });
         }
 
         self.add_audit_log(
@@ -177,11 +204,10 @@ impl AgentAppState {
         let ws_client_opt = self.ws_client.read().unwrap().clone();
         if let Some(client) = ws_client_opt {
             client.reset_running();
-            if tokio::runtime::Handle::try_current().is_ok() {
-                tokio::spawn(async move {
-                    client.run().await;
-                });
-            }
+            client.notify_reconnect();
+            self.spawn_async(async move {
+                client.run().await;
+            });
         }
 
         self.add_audit_log(
@@ -223,14 +249,12 @@ impl AgentAppState {
             self.set_status(ClientConnectionStatus::Connecting);
 
             let url_clone = trimmed.clone();
-            if tokio::runtime::Handle::try_current().is_ok() {
-                tokio::spawn(async move {
-                    client.set_server_url(url_clone).await;
-                    client.reset_running();
-                    client.abort_active_session().await;
-                    client.run().await;
-                });
-            }
+            self.spawn_async(async move {
+                client.set_server_url(url_clone).await;
+                client.reset_running();
+                client.abort_active_session().await;
+                client.run().await;
+            });
         }
 
         self.add_audit_log(

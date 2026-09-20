@@ -285,8 +285,10 @@ impl AgentConfig {
 
         let ips = get_local_ips();
         let lan_ip = ips
-            .first()
+            .iter()
+            .find(|ip| ip.contains('.') && !ip.starts_with("127."))
             .cloned()
+            .or_else(|| ips.first().cloned())
             .unwrap_or_else(|| "127.0.0.1".to_string());
 
         let os_name = System::name().unwrap_or_else(|| std::env::consts::OS.to_string());
