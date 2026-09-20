@@ -131,9 +131,18 @@ impl AgentWsClient {
         }
     }
 
-    /// Sets optional auth token for registration
+    /// Sets optional auth token for registration [DEPRECATED: use `with_device_token`]
     pub fn with_auth_token(mut self, auth_token: Option<String>) -> Self {
         self.auth_token = auth_token;
+        self
+    }
+
+    /// Sets optional device token for registration (format: `atpc_dv_...`).
+    /// If provided, overrides any previously set legacy auth token.
+    pub fn with_device_token(mut self, device_token: Option<String>) -> Self {
+        if device_token.is_some() {
+            self.auth_token = device_token;
+        }
         self
     }
 

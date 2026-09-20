@@ -7,7 +7,11 @@
 # 若服务端开启了 TLS，请使用 wss:// 协议，如 wss://127.0.0.1:9801/ws
 url = "ws://192.168.66.224:9801/ws"
 
-# 可选：连接鉴权 Token (若服务端配置了 --auth-token 则需保持一致，默认留空)
+# 设备认证 Token (推荐方式：由服务端签发并与 terminal_id 绑定的设备 Token，格式为 atpc_dv_<id>_<secret>)
+# 亦可通过启动参数 --device-token <TOKEN> 或环境变量 AT_PC_DEVICE_TOKEN 动态传入
+# device_token = "atpc_dv_01234567_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
+
+# [DEPRECATED: 建议使用 device_token] 旧版共享鉴权 Token (若服务端配置了 --auth-token 则需保持一致，默认留空；已弃用，新部署请迁移至 device_token)
 # auth_token = "your-secret-token"
 
 # 断线自动重连间隔 (秒)

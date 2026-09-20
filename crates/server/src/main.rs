@@ -9,7 +9,7 @@ use at_pc_server::router::McpRouter;
 use at_pc_server::ws::{start_ws_server_with_state, TerminalRegistry, WsServerState};
 use at_pc_server::{
     abort_and_join_tasks, shutdown_persistence, shutdown_signal,
-    start_mcp_http_server_with_shutdown,
+    start_mcp_http_server_with_shutdown, AuthRateLimiter, KeyStore,
 };
 
 /// CLI arguments for server bootstrap and authentication gate
@@ -394,7 +394,15 @@ async fn run_server_pipeline(
     );
 
     // 4. Start WebSocket Gateway in background
-    let ws_state = WsServerState::with_handler(registry.clone(), config.clone(), router.clone());
+    let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
+        config::default_data_dir().join("keys.json")
+    });
+    let keystore = KeyStore::load_or_create(&keys_file).ok().map(Arc::new);
+    let rate_limiter = Arc::new(AuthRateLimiter::default());
+
+    let mut ws_state = WsServerState::with_handler(registry.clone(), config.clone(), router.clone());
+    ws_state.keystore = keystore.clone();
+    ws_state.rate_limiter = rate_limiter.clone();
     let ws_port = config.ws_port;
     let ws_handle = tokio::spawn(async move {
         if let Err(e) = start_ws_server_with_state(ws_state, ws_port).await {

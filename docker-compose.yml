@@ -12,8 +12,11 @@ services:
       # 门禁已默认开启：首启 root key 见 `docker logs at-pc-server`（atpc_sk_ 前缀），
       # 以及具名卷 at-pc-data 内的 /var/lib/at-pc/bootstrap_key.txt。
       # 以下两行将端口发布到 0.0.0.0，确认你确实需要开放公网访问再保留。
-      - "9800:9800" # MCP HTTP / SSE & Web Management Console
-      - "9801:9801" # Agent WebSocket Gateway
+      - "9800:9800" # MCP HTTP / SSE & Web Management Console (Client API Key: atpc_sk_...)
+      - "9801:9801" # Agent WebSocket Gateway (Device Token: atpc_dv_... bound to terminal_id; legacy auth_token is deprecated)
+      # 设备接入认证：Agent 连接 9801 请使用在控制台签发的设备 Token (atpc_dv_...)，
+      # 通过 agent_config.toml 的 device_token、--device-token 或环境变量 AT_PC_DEVICE_TOKEN 配置。
+      # 旧版 auth_token / AT_PC_AUTH_TOKEN 仍保持向后兼容但已弃用。
     volumes:
       - at-pc-data:/var/lib/at-pc
       - at-pc-logs:/var/log/at-pc

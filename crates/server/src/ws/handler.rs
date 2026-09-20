@@ -1,4 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -6,6 +7,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::config::ServerConfig;
+use crate::keystore::{KeyKind, KeyStore};
+use crate::rate_limit::{AuthRateLimiter, RateLimitDecision};
 use crate::ws::registry::TerminalRegistry;
 use at_pc_protocol::messages::{AgentToServerMessage, BinaryDesktopFrame, ServerToAgentMessage};
 use at_pc_protocol::models::{TerminalInfo, TerminalStatus};
@@ -40,6 +43,8 @@ pub struct WsServerState {
     pub registry: Arc<TerminalRegistry>,
     pub config: ServerConfig,
     pub message_handler: Option<Arc<dyn AgentMessageHandler>>,
+    pub keystore: Option<Arc<KeyStore>>,
+    pub rate_limiter: Arc<AuthRateLimiter>,
 }
 
 impl WsServerState {
@@ -48,6 +53,8 @@ impl WsServerState {
             registry,
             config,
             message_handler: None,
+            keystore: None,
+            rate_limiter: Arc::new(AuthRateLimiter::default()),
         }
     }
 
@@ -60,13 +67,29 @@ impl WsServerState {
             registry,
             config,
             message_handler: Some(handler),
+            keystore: None,
+            rate_limiter: Arc::new(AuthRateLimiter::default()),
         }
+    }
+
+    pub fn with_keystore(mut self, keystore: Arc<KeyStore>) -> Self {
+        self.keystore = Some(keystore);
+        self
+    }
+
+    pub fn with_rate_limiter(
+        mut self,
+        rate_limiter: Arc<AuthRateLimiter>,
+    ) -> Self {
+        self.rate_limiter = rate_limiter;
+        self
     }
 }
 
 /// Handle a full connected TCP stream upgraded to WebSocket using standard production-grade WebSocket stack
 pub async fn handle_connection(stream: TcpStream, state: WsServerState) {
-    handle_stream(stream, state).await;
+    let peer_addr = stream.peer_addr().ok();
+    handle_stream_with_peer(stream, state, peer_addr).await;
 }
 
 /// Handle any connected async stream upgraded to WebSocket using tokio-tungstenite
@@ -74,6 +97,28 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     stream: S,
     state: WsServerState,
 ) {
+    handle_stream_with_peer(stream, state, None).await;
+}
+
+/// Handle any connected async stream with known peer address upgraded to WebSocket using tokio-tungstenite
+pub async fn handle_stream_with_peer<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    stream: S,
+    state: WsServerState,
+    peer_addr: Option<SocketAddr>,
+) {
+    if let Some(addr) = peer_addr {
+        if matches!(
+            state.rate_limiter.check(addr.ip()),
+            RateLimitDecision::Banned { .. }
+        ) {
+            warn!(
+                "Rejected WebSocket connection from banned IP: {}",
+                addr.ip()
+            );
+            return;
+        }
+    }
+
     let ws_path = state.config.ws_path.clone();
     #[allow(clippy::result_large_err)]
     let callback =
@@ -109,7 +154,7 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 
     // 1. Initial Handshake: Wait for Register message
     let (terminal_info, initial_sender_tx, mut initial_sender_rx, session_id) =
-        match wait_for_registration(&mut ws_reader, &mut ws_sink, &state).await {
+        match wait_for_registration(&mut ws_reader, &mut ws_sink, &state, peer_addr).await {
             Ok(res) => res,
             Err(err_msg) => {
                 warn!("WebSocket registration handshake failed: {}", err_msg);
@@ -288,6 +333,26 @@ pub async fn handle_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     forward_task.abort();
 }
 
+async fn send_register_reject<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    sink: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<S>,
+        tokio_tungstenite::tungstenite::Message,
+    >,
+    message: &str,
+    heartbeat_interval_secs: u64,
+) {
+    let ack = ServerToAgentMessage::RegisterAck {
+        success: false,
+        message: Some(message.to_string()),
+        heartbeat_interval_secs,
+    };
+    if let Ok(json) = serde_json::to_string(&ack) {
+        let _ = sink
+            .send(tokio_tungstenite::tungstenite::Message::Text(json))
+            .await;
+    }
+}
+
 /// Wait for the first message to be a valid Register payload
 async fn wait_for_registration<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     reader: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
@@ -296,6 +361,7 @@ async fn wait_for_registration<S: AsyncRead + AsyncWrite + Unpin + Send + 'stati
         tokio_tungstenite::tungstenite::Message,
     >,
     state: &WsServerState,
+    peer_addr: Option<SocketAddr>,
 ) -> Result<
     (
         TerminalInfo,
@@ -323,21 +389,122 @@ async fn wait_for_registration<S: AsyncRead + AsyncWrite + Unpin + Send + 'stati
     let msg: AgentToServerMessage = serde_json::from_str(&text)
         .map_err(|e| format!("Failed to parse Register message: {}", e))?;
 
+    if let Some(addr) = peer_addr {
+        if matches!(
+            state.rate_limiter.check(addr.ip()),
+            RateLimitDecision::Banned { .. } | RateLimitDecision::RateLimited { .. }
+        ) {
+            send_register_reject(
+                sink,
+                "Rate limit exceeded",
+                state.config.heartbeat_interval_secs,
+            )
+            .await;
+            return Err("Rate limit exceeded".to_string());
+        }
+    }
+
     match msg {
         AgentToServerMessage::Register { info, auth_token } => {
-            // Check auth_token if configured
-            if let Some(expected_token) = &state.config.auth_token {
-                if auth_token.as_ref() != Some(expected_token) {
-                    let ack = ServerToAgentMessage::RegisterAck {
-                        success: false,
-                        message: Some("Invalid authentication token".to_string()),
-                        heartbeat_interval_secs: state.config.heartbeat_interval_secs,
-                    };
-                    let json = serde_json::to_string(&ack).unwrap();
-                    let _ = sink
-                        .send(tokio_tungstenite::tungstenite::Message::Text(json))
+            if let Some(ref token) = auth_token {
+                if let Some(ref ks) = state.keystore {
+                    match ks.verify(token) {
+                        Ok(principal) => {
+                            if principal.kind != KeyKind::DeviceToken {
+                                if let Some(addr) = peer_addr {
+                                    state.rate_limiter.record_failure(addr.ip());
+                                }
+                                send_register_reject(
+                                    sink,
+                                    "Operation token cannot be used for device registration",
+                                    state.config.heartbeat_interval_secs,
+                                )
+                                .await;
+                                return Err(
+                                    "Operation token cannot be used for device registration"
+                                        .to_string(),
+                                );
+                            }
+
+                            if let Some(ref bound_dev) = principal.device_id {
+                                if bound_dev != &info.terminal_id {
+                                    if let Some(addr) = peer_addr {
+                                        state.rate_limiter.record_failure(addr.ip());
+                                    }
+                                    send_register_reject(
+                                        sink,
+                                        "Terminal ID does not match bound device_id",
+                                        state.config.heartbeat_interval_secs,
+                                    )
+                                    .await;
+                                    return Err(
+                                        "Terminal ID does not match bound device_id".to_string(),
+                                    );
+                                }
+                            }
+
+                            if let Some(addr) = peer_addr {
+                                state.rate_limiter.record_success(addr.ip());
+                            }
+                        }
+                        Err(_) => {
+                            if state.config.auth_token.as_ref() == Some(token) {
+                                tracing::warn!(
+                                    "Terminal {} registered using deprecated legacy auth_token. Please migrate to device tokens.",
+                                    info.terminal_id
+                                );
+                                if let Some(addr) = peer_addr {
+                                    state.rate_limiter.record_success(addr.ip());
+                                }
+                            } else {
+                                if let Some(addr) = peer_addr {
+                                    state.rate_limiter.record_failure(addr.ip());
+                                }
+                                send_register_reject(
+                                    sink,
+                                    "Invalid authentication token",
+                                    state.config.heartbeat_interval_secs,
+                                )
+                                .await;
+                                return Err("Invalid authentication token".to_string());
+                            }
+                        }
+                    }
+                } else {
+                    if state.config.auth_token.as_ref() == Some(token) {
+                        if let Some(addr) = peer_addr {
+                            state.rate_limiter.record_success(addr.ip());
+                        }
+                    } else {
+                        if let Some(addr) = peer_addr {
+                            state.rate_limiter.record_failure(addr.ip());
+                        }
+                        send_register_reject(
+                            sink,
+                            "Invalid authentication token",
+                            state.config.heartbeat_interval_secs,
+                        )
                         .await;
-                    return Err("Authentication failed".to_string());
+                        return Err("Invalid authentication token".to_string());
+                    }
+                }
+            } else {
+                let has_active_keys = state
+                    .keystore
+                    .as_ref()
+                    .map(|k| k.has_active_keys())
+                    .unwrap_or(false);
+                if has_active_keys || state.config.has_credentials() {
+                    if let Some(addr) = peer_addr {
+                        state.rate_limiter.record_failure(addr.ip());
+                    }
+                    send_register_reject(
+                        sink,
+                        "Authentication token required",
+                        state.config.heartbeat_interval_secs,
+                    )
+                    .await;
+                    return Err("Authentication token required".to_string());
                 }
             }
 

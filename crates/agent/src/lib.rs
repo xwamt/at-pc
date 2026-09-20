@@ -27,7 +27,7 @@ pub async fn run_headless(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let terminal_info = config.to_terminal_info();
     let server_url = config.server.url.clone();
-    let auth_token = config.server.auth_token.clone();
+    let auth_token = config.resolve_token();
     let reconnect_secs = config.server.reconnect_interval_secs;
 
     tracing::info!(

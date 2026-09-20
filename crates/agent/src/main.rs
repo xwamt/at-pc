@@ -115,6 +115,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "    -H, --headless            Run in headless background service mode without GUI"
         );
         println!("        --service             Alias for --headless");
+        println!("    --device-token <TOKEN>    Device Token (atpc_dv_...) for authentication");
+        println!(
+            "    --auth-token <TOKEN>      [DEPRECATED: use --device-token] Legacy authentication token"
+        );
         println!("    --enable-computer-use     Enable simulated mouse and keyboard MCP tools");
         println!("    --no-tray                 Run without system tray icon");
         println!("    --ca-cert <PATH>          Path to CA certificate for TLS/WSS verification");
@@ -125,6 +129,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
         println!("    -h, --help                Print help information\n");
         println!("ENVIRONMENT VARIABLES:");
+        println!("    AT_PC_DEVICE_TOKEN        Device Token (atpc_dv_...) for authentication");
+        println!("    AT_PC_AUTH_TOKEN          [DEPRECATED: use AT_PC_DEVICE_TOKEN] Legacy authentication token");
         println!("    AT_PC_HEADLESS=1          Run in headless background service mode");
         println!("    AT_PC_SERVICE=1           Run in background service mode");
         println!("    AT_PC_ENABLE_COMPUTER_USE=1 Enable simulated mouse and keyboard MCP tools");
@@ -133,6 +139,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let mut custom_config_path = None;
     let mut cli_server_url = None;
+    let mut cli_device_token = None;
+    let mut cli_auth_token = None;
     let mut headless = std::env::var("AT_PC_HEADLESS")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
@@ -152,6 +160,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         if (args[i] == "--server" || args[i] == "-s") && i + 1 < args.len() {
             cli_server_url = Some(args[i + 1].clone());
+        }
+        if args[i] == "--device-token" && i + 1 < args.len() {
+            cli_device_token = Some(args[i + 1].clone());
+        }
+        if args[i] == "--auth-token" && i + 1 < args.len() {
+            cli_auth_token = Some(args[i + 1].clone());
         }
         if args[i] == "--headless" || args[i] == "-H" || args[i] == "--service" {
             headless = true;
@@ -181,6 +195,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(url) = cli_server_url {
         tracing::info!("Overriding server URL from CLI: {}", url);
         config.server.url = url;
+    }
+    if let Some(token) = cli_device_token {
+        config.device_token = Some(token);
+    }
+    if let Some(token) = cli_auth_token {
+        tracing::warn!("--auth-token is deprecated: use --device-token instead");
+        config.server.auth_token = Some(token);
     }
     if cli_enable_cu {
         config.enable_computer_use = true;
@@ -222,7 +243,7 @@ async fn run_gui(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let terminal_info = config.to_terminal_info();
     let server_url = config.server.url.clone();
-    let auth_token = config.server.auth_token.clone();
+    let auth_token = config.resolve_token();
     let reconnect_secs = config.server.reconnect_interval_secs;
 
     tracing::info!(

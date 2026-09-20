@@ -3,6 +3,11 @@ set -euo pipefail
 
 # ==============================================================================
 # at-pc-server Linux Deployment Script
+#
+# 认证与凭据说明:
+# - 操作域 (MCP/Console, :9800): 客户端 API Key (atpc_sk_...)，首启由 bootstrap 自动生成或在控制台签发。
+# - 设备域 (Agent WebSocket, :9801): 设备 Token (atpc_dv_...)，按设备独立签发并与 terminal_id 严格绑定。
+#   受控端通过 device_token (或 AT_PC_DEVICE_TOKEN) 配置；旧版 auth_token (--auth-token) 保持向后兼容但已弃用。
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

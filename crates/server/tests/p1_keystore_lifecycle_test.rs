@@ -31,14 +31,18 @@ impl Drop for TestContext {
     }
 }
 
+static TEST_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 async fn setup_test_context() -> TestContext {
+    let count = TEST_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "atpc-m1-test-{}-{}",
+        "atpc-m1-test-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        count
     ));
     std::fs::create_dir_all(&dir).unwrap();
 

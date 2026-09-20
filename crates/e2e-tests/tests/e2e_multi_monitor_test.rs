@@ -46,11 +46,7 @@ impl TestCluster {
             heartbeat_interval_secs: 5,
             ..Default::default()
         };
-        let server_state = WsServerState {
-            registry: registry.clone(),
-            config,
-            message_handler: Some(router.clone()),
-        };
+        let server_state = WsServerState::with_handler(registry.clone(), config, router.clone());
         Self {
             registry,
             router,

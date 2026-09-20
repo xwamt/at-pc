@@ -7,7 +7,8 @@ use tracing::info;
 
 use crate::config::ServerConfig;
 pub use handler::{
-    handle_connection, handle_stream, AgentMessageHandler, NoopMessageHandler, WsServerState,
+    handle_connection, handle_stream, handle_stream_with_peer, AgentMessageHandler,
+    NoopMessageHandler, WsServerState,
 };
 pub use registry::{TerminalEntry, TerminalRegistry, TerminalSession, TerminalStatus};
 
@@ -21,11 +22,7 @@ pub async fn start_ws_server<H: AgentMessageHandler + 'static>(
         ws_port: port,
         ..Default::default()
     };
-    let state = WsServerState {
-        registry,
-        config,
-        message_handler: Some(message_handler),
-    };
+    let state = WsServerState::with_handler(registry, config, message_handler);
     start_ws_server_with_state(state, port).await
 }
 
@@ -76,22 +73,25 @@ pub async fn start_ws_server_with_listener(
 
     loop {
         let (socket, peer_addr) = listener.accept().await?;
+        let peer_addr = socket.peer_addr().ok().or(Some(peer_addr));
         let state_clone = state.clone();
         let acceptor_clone = tls_acceptor.clone();
 
         tokio::spawn(async move {
-            tracing::debug!("New TCP connection from {}", peer_addr);
+            if let Some(addr) = peer_addr {
+                tracing::debug!("New TCP connection from {}", addr);
+            }
             if let Some(acceptor) = acceptor_clone {
                 match acceptor.accept(socket).await {
                     Ok(tls_stream) => {
-                        handle_stream(tls_stream, state_clone).await;
+                        handle_stream_with_peer(tls_stream, state_clone, peer_addr).await;
                     }
                     Err(e) => {
-                        tracing::debug!("TLS handshake failed from {}: {}", peer_addr, e);
+                        tracing::debug!("TLS handshake failed: {}", e);
                     }
                 }
             } else {
-                handle_connection(socket, state_clone).await;
+                handle_stream_with_peer(socket, state_clone, peer_addr).await;
             }
         });
     }

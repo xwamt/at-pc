@@ -240,7 +240,11 @@ AT-PC 向上层智能体提供了工业级全方位的工具箱，所有工具�
 # 中心服务端 WebSocket 连接地址 (局域网或公网 IP)
 url = "ws://127.0.0.1:9801/ws"
 
-# 可选：连接鉴权 Token (若服务端开启了认证则需一致)
+# 设备认证 Token (推荐方式：由服务端控制台签发并与 terminal_id 严格绑定的设备 Token，格式为 atpc_dv_<id>_<secret>)
+# 亦可通过启动参数 --device-token <TOKEN> 或环境变量 AT_PC_DEVICE_TOKEN 动态指定
+# device_token = "atpc_dv_01234567_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
+
+# [DEPRECATED: 建议使用 device_token] 旧版连接鉴权 Token (若服务端配置了 --auth-token 则需一致；已弃用，新部署请迁移至 device_token)
 # auth_token = "admin-secret-token"
 
 # 断线自动重连间隔 (秒)
@@ -347,6 +351,14 @@ sudo rm /var/lib/at-pc/bootstrap_key.txt
 - **完全免门禁（开放态）**：`--host 127.0.0.1 --no-bootstrap`（回环监听 + 无凭据 = 开放态）。
 - **公网部署无凭据**：直接拒绝启动，需提供首启生成的 key。
 - **显式豁免（不建议）**：`--insecure-no-auth` 可强制关闭门禁，仅限隔离测试环境。
+
+### ④ 凭据分域：操作端 API Key 与受控端设备 Token
+
+AT-PC 将操作域与设备域凭据物理隔离，避免受控端凭据泄漏危害管理控制台：
+
+- **操作域凭据 (`atpc_sk_...`)**：供用户通过 Web 控制台或 MCP 协议访问 `:9800`，具有精细化角色权限体系（Admin / Operator / Viewer）。**禁止用于受控端注册**。
+- **设备域凭据 (`atpc_dv_...`)**：供受控端 Agent 连接 `:9801` WebSocket 网关，由管理员在 Web 控制台按设备独立签发，并可绑定设备 `terminal_id`（设备 ID 不匹配时将被服务端自动拒绝，有效防止 Token 盗用）。受控端通过 `device_token`（或环境变量 `AT_PC_DEVICE_TOKEN`、命令行参数 `--device-token`）进行配置。
+- **旧版共享 Token 迁移**：旧版 `--auth-token` / `auth_token` (`AT_PC_AUTH_TOKEN`) 为全局共享凭据，在新版中已标记为弃用（`[DEPRECATED: use --device-token]`），仅用于向后兼容，请尽快迁移为设备专属 Token。
 
 ---
 
