@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test tests/api.test.js tests/desktop.test.js tests/terminals.test.js tests/typecheck-guard.test.js",
+    "test": "node --test tests/api.test.js tests/desktop.test.js tests/terminals.test.js tests/typecheck-guard.test.js tests/keys.test.js",
     "lint": "eslint src tests vite.config.js",
     "typecheck": "tsc --noEmit -p jsconfig.json"
   },

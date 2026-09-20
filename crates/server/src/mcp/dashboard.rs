@@ -18,6 +18,7 @@ use std::path::{Component, Path as FilePath};
 
 use super::McpHttpState;
 use crate::config::Role;
+use crate::keystore::{KeyKind, KeySummary, Principal};
 
 /// Embedded static frontend assets bundled directly into binary release artifact.
 /// Vite writes the production bundle to `frontend/dist/` so rust-embed packs
@@ -68,6 +69,10 @@ pub fn create_dashboard_router() -> Router<McpHttpState> {
             "/terminals/:id/desktop/stream",
             post(api_start_desktop_stream),
         )
+        .route(
+            "/terminals/:id/desktop/start",
+            post(api_start_desktop_stream),
+        )
         .route("/terminals/:id/desktop/stop", post(api_stop_desktop_stream))
         .route("/terminals/:id/desktop/frame", get(api_get_desktop_frame))
         .route(
@@ -81,7 +86,11 @@ pub fn create_dashboard_router() -> Router<McpHttpState> {
             post(api_cancel_terminal_call),
         )
         .route("/calls", get(api_list_pending_calls))
-        .route("/calls/:id/cancel", post(api_cancel_call));
+        .route("/calls/:id/cancel", post(api_cancel_call))
+        .route("/auth/me", get(api_auth_me))
+        .route("/keys", get(api_list_keys).post(api_create_key))
+        .route("/keys/:id", axum::routing::delete(api_revoke_key))
+        .route("/keys/:id/rotate", post(api_rotate_key));
 
     let static_routes = Router::new().route("/*path", get(static_asset_handler));
 
@@ -938,6 +947,232 @@ async fn api_export_audit_logs(
         bytes,
     )
         .into_response()
+}
+
+/// Handler for `GET /api/auth/me`
+async fn api_auth_me(
+    Extension(role): Extension<Role>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    if let Some(principal) = req.extensions().get::<Principal>() {
+        Json(json!({
+            "id": principal.id,
+            "name": principal.name,
+            "kind": principal.kind,
+            "role": principal.role,
+            "scopes": principal.scopes,
+        }))
+    } else {
+        Json(json!({
+            "id": "legacy",
+            "name": "legacy",
+            "kind": "sk",
+            "role": role,
+            "scopes": ["*"],
+        }))
+    }
+}
+
+/// Handler for `GET /api/keys`
+async fn api_list_keys(
+    State(state): State<McpHttpState>,
+    Extension(role): Extension<Role>,
+) -> Result<Json<Vec<KeySummary>>, (StatusCode, Json<Value>)> {
+    if role < Role::Admin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Forbidden: Admin role required" })),
+        ));
+    }
+    let keys = state.keystore.as_ref().map(|ks| ks.list()).unwrap_or_default();
+    Ok(Json(keys))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateKeyRequest {
+    name: String,
+    kind: Option<KeyKind>,
+    role: Option<Role>,
+    scopes: Option<Vec<String>>,
+    device_id: Option<String>,
+    expires_days: Option<u64>,
+}
+
+/// Handler for `POST /api/keys`
+async fn api_create_key(
+    State(state): State<McpHttpState>,
+    Extension(role): Extension<Role>,
+    Json(payload): Json<CreateKeyRequest>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    if role < Role::Admin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Forbidden: Admin role required" })),
+        ));
+    }
+    let Some(ref ks) = state.keystore else {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Keystore not initialized" })),
+        ));
+    };
+
+    let kind = payload.kind.unwrap_or(KeyKind::SecretKey);
+    let key_role = payload.role.or(Some(Role::Viewer));
+    let scopes = payload.scopes.unwrap_or_else(|| vec!["console".to_string(), "mcp".to_string()]);
+    let expires_at = payload.expires_days.map(|days| {
+        (chrono::Utc::now() + chrono::Duration::days(days as i64)).to_rfc3339()
+    });
+
+    match ks.issue(payload.name, kind, key_role, scopes, payload.device_id, expires_at) {
+        Ok((record, plaintext)) => {
+            if let Some(ref logger) = state.audit_logger {
+                logger.log(crate::audit::AuditRecord {
+                    id: format!("audit-{}", crate::router::generate_call_id()),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    role: Some(role.to_string()),
+                    token_prefix: Some(crate::audit::AuditLogger::redact_token(&plaintext)),
+                    client_ip: None,
+                    terminal_id: None,
+                    action: crate::audit::ACTION_KEY_CREATE.to_string(),
+                    tool_name: None,
+                    arguments: Some(json!({ "key_id": record.id, "name": record.name, "kind": record.kind })),
+                    status: "OK".to_string(),
+                    error: None,
+                    duration_ms: Some(0),
+                });
+            }
+            Ok((
+                StatusCode::CREATED,
+                Json(json!({
+                    "plaintext": plaintext,
+                    "key": record.to_summary(),
+                })),
+            ))
+        }
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("Failed to create key: {e}") })),
+        )),
+    }
+}
+
+/// Handler for `DELETE /api/keys/:id`
+async fn api_revoke_key(
+    State(state): State<McpHttpState>,
+    Extension(role): Extension<Role>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    if role < Role::Admin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Forbidden: Admin role required" })),
+        ));
+    }
+    let Some(ref ks) = state.keystore else {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Keystore not initialized" })),
+        ));
+    };
+
+    match ks.revoke(&id) {
+        Ok(()) => {
+            if let Some(ref logger) = state.audit_logger {
+                logger.log(crate::audit::AuditRecord {
+                    id: format!("audit-{}", crate::router::generate_call_id()),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    role: Some(role.to_string()),
+                    token_prefix: None,
+                    client_ip: None,
+                    terminal_id: None,
+                    action: crate::audit::ACTION_KEY_REVOKE.to_string(),
+                    tool_name: None,
+                    arguments: Some(json!({ "key_id": id })),
+                    status: "OK".to_string(),
+                    error: None,
+                    duration_ms: Some(0),
+                });
+            }
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(e) if e.contains("last active admin key") => Err((
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "Cannot revoke the last active admin key" })),
+        )),
+        Err(e) if e.contains("not found") => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Key not found" })),
+        )),
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("Failed to revoke key: {e}") })),
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RotateKeyRequest {
+    grace_hours: Option<u64>,
+}
+
+/// Handler for `POST /api/keys/:id/rotate`
+async fn api_rotate_key(
+    State(state): State<McpHttpState>,
+    Extension(role): Extension<Role>,
+    Path(id): Path<String>,
+    payload: Option<Json<RotateKeyRequest>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if role < Role::Admin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Forbidden: Admin role required" })),
+        ));
+    }
+    let Some(ref ks) = state.keystore else {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Keystore not initialized" })),
+        ));
+    };
+
+    let grace = payload.and_then(|p| p.0.grace_hours);
+    match ks.rotate(&id, grace) {
+        Ok((record, plaintext)) => {
+            if let Some(ref logger) = state.audit_logger {
+                logger.log(crate::audit::AuditRecord {
+                    id: format!("audit-{}", crate::router::generate_call_id()),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    role: Some(role.to_string()),
+                    token_prefix: Some(crate::audit::AuditLogger::redact_token(&plaintext)),
+                    client_ip: None,
+                    terminal_id: None,
+                    action: crate::audit::ACTION_KEY_ROTATE.to_string(),
+                    tool_name: None,
+                    arguments: Some(json!({
+                        "old_key_id": id,
+                        "new_key_id": record.id,
+                        "grace_hours": grace,
+                    })),
+                    status: "OK".to_string(),
+                    error: None,
+                    duration_ms: Some(0),
+                });
+            }
+            Ok(Json(json!({
+                "plaintext": plaintext,
+                "key": record.to_summary(),
+            })))
+        }
+        Err(e) if e.contains("not found") => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Key not found" })),
+        )),
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("Failed to rotate key: {e}") })),
+        )),
+    }
 }
 
 #[cfg(test)]

@@ -123,6 +123,9 @@ pub struct ServerConfig {
     /// Optional path for the server runtime log file (default: "at-pc-server.log")
     #[serde(default)]
     pub log_file_path: Option<PathBuf>,
+    /// Path to persistent keys file (`<data_dir>/keys.json`).
+    #[serde(default)]
+    pub keys_file_path: Option<PathBuf>,
     /// Disable the first-boot root API key bootstrap (`--no-bootstrap`).
     #[serde(default)]
     pub bootstrap_disabled: bool,
@@ -155,6 +158,7 @@ impl Default for ServerConfig {
             roles: HashMap::new(),
             audit_log_path: default_audit_log_path(),
             log_file_path: None,
+            keys_file_path: None,
             bootstrap_disabled: false,
             insecure_no_auth: false,
             allow_plaintext: false,
@@ -284,4 +288,50 @@ pub fn validate_boot_gate(
     Err(BootGateError::MissingCredentials {
         host: cfg.listen_host.clone(),
     })
+}
+
+/// Minimum Role required to access an HTTP endpoint (A7 / G1-3).
+///
+/// If None, the endpoint has no specific handler-level RBAC gate (handled by auth_layer or public).
+pub fn handler_min_role(path: &str, method: &str) -> Option<Role> {
+    let method = method.to_ascii_uppercase();
+    let trimmed_path = path.split('?').next().unwrap_or(path);
+
+    if trimmed_path == "/api/logs" && method == "GET" {
+        return Some(Role::Admin);
+    }
+    if trimmed_path == "/api/keys" {
+        return Some(Role::Admin);
+    }
+    if trimmed_path.starts_with("/api/keys/") {
+        return Some(Role::Admin);
+    }
+    if trimmed_path == "/api/auth/me" && method == "GET" {
+        return Some(Role::Viewer);
+    }
+    if trimmed_path == "/api/terminals" && method == "GET" {
+        return Some(Role::Viewer);
+    }
+    if method == "POST" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/meta") {
+        return Some(Role::Operator);
+    }
+    if trimmed_path == "/api/calls" && method == "GET" {
+        return Some(Role::Viewer);
+    }
+    if method == "GET" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/calls") {
+        return Some(Role::Viewer);
+    }
+    if method == "POST" && trimmed_path.starts_with("/api/terminals/") && (trimmed_path.ends_with("/desktop/start") || trimmed_path.ends_with("/desktop/stream")) {
+        return Some(Role::Operator);
+    }
+    if method == "POST" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/stop") {
+        return Some(Role::Operator);
+    }
+    if method == "GET" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/frame") {
+        return Some(Role::Viewer);
+    }
+    if method == "GET" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/raw") {
+        return Some(Role::Viewer);
+    }
+    None
 }

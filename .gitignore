@@ -43,6 +43,8 @@ Thumbs.db
 *.log
 audit.jsonl
 terminals_meta.json
+bootstrap_key.txt
+keys.json
 scratch/
 tmp/
 *.tmp

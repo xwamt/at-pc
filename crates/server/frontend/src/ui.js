@@ -45,3 +45,36 @@ export function closeModal() {
   beforeClose?.();
   byId("resultModal").style.display = "none";
 }
+
+/**
+ * @param {string} text
+ * @returns {Promise<void>}
+ */
+export function copyTextToClipboard(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "-9999px";
+      textarea.setAttribute("readonly", "");
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const success = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      if (success) {
+        resolve();
+      } else {
+        reject(new Error("document.execCommand copy failed"));
+      }
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+

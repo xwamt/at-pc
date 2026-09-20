@@ -23,6 +23,8 @@ use tower_http::cors::CorsLayer;
 use tracing::debug;
 
 use crate::config::ServerConfig;
+use crate::keystore::{AuthError, KeyKind, KeyStore, Principal};
+use crate::rate_limit::{AuthRateLimiter, RateLimitDecision};
 use crate::router::McpRouter;
 
 /// Server state shared across MCP HTTP/SSE endpoints
@@ -33,6 +35,10 @@ pub struct McpHttpState {
     pub log_file_path: std::path::PathBuf,
     /// Audit logger used by the auth layer to record AUTH_FAILED events.
     pub audit_logger: Option<Arc<crate::audit::AuditLogger>>,
+    /// KeyStore for managing client API keys and device tokens.
+    pub keystore: Option<Arc<KeyStore>>,
+    /// Rate limiter tracking authentication failures per IP address.
+    pub rate_limiter: Arc<AuthRateLimiter>,
 }
 
 /// Returns the server log path used by both the tracing writer and dashboard tail endpoint.
@@ -115,13 +121,26 @@ pub fn create_mcp_http_router(router: Arc<McpRouter>, config: ServerConfig) -> R
         .unwrap_or_else(default_log_file_path);
 
     let audit_logger = router.audit_logger().cloned();
+    let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
+        crate::config::default_data_dir().join("keys.json")
+    });
+    let keystore = KeyStore::load_or_create(&keys_file).ok().map(Arc::new);
+    let rate_limiter = Arc::new(AuthRateLimiter::default());
+
     let state = McpHttpState {
         router,
         config: config.clone(),
         log_file_path: log_file,
         audit_logger,
+        keystore,
+        rate_limiter,
     };
 
+    create_mcp_http_router_with_state(state, cors)
+}
+
+/// Create router with explicitly supplied McpHttpState (useful for tests and custom keystores).
+pub fn create_mcp_http_router_with_state(state: McpHttpState, cors: CorsLayer) -> Router {
     Router::new()
         .merge(dashboard::create_dashboard_router())
         .route("/", post(messages_handler))
@@ -183,19 +202,120 @@ pub async fn auth_layer(
         return next.run(req).await;
     }
 
-    let (token_opt, _source) = extract_credential(req.headers(), req.uri().query());
-    let role_opt = match &token_opt {
-        Some(token) if state.config.has_credentials() => state.config.get_role_for_token(token),
-        _ if state.config.insecure_no_auth => Some(crate::config::Role::Admin),
-        _ if peer_loopback && !state.config.has_credentials() => {
-            Some(crate::config::Role::Admin)
+    // 1. Rate limiter pre-check on peer IP (block banned IPs)
+    if let Some(addr) = peer {
+        if let RateLimitDecision::Banned { retry_after_secs } = state.rate_limiter.check(addr.ip()) {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(axum::http::header::RETRY_AFTER, retry_after_secs.to_string())],
+                Json(json!({ "error": "Too Many Requests: IP address is temporarily banned" })),
+            )
+                .into_response();
         }
-        _ => None,
-    };
+    }
 
-    let role = match role_opt {
-        Some(r) => r,
+    let (token_opt, source) = extract_credential(req.headers(), req.uri().query());
+    let is_query = matches!(source, Some(CredentialSource::Query));
+
+    let mut resolved_role: Option<crate::config::Role> = None;
+    let mut principal_opt: Option<Principal> = None;
+
+    if let Some(ref token) = token_opt {
+        if let Some(ref ks) = state.keystore {
+            match ks.verify(token) {
+                Ok(principal) => {
+                    // Check kind: dv token cannot be used for client HTTP/dashboard
+                    if principal.kind == KeyKind::DeviceToken {
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(json!({ "error": "Forbidden: Device token cannot be used for client API or console" })),
+                        ).into_response();
+                    }
+                    // Check scopes: must have mcp or console (or wildcard *)
+                    if !(principal.has_scope("mcp") || principal.has_scope("console") || principal.has_scope("*")) {
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(json!({ "error": "Forbidden: Key lacks required scope" })),
+                        ).into_response();
+                    }
+                    resolved_role = principal.role;
+                    principal_opt = Some(principal);
+                }
+                Err(AuthError::KeyNotFound) | Err(AuthError::InvalidFormat) => {
+                    // Key not found in keystore or legacy token format; fallback to legacy credentials below
+                }
+                Err(e) => {
+                    // Other errors (expired, revoked, hash mismatch, invalid format): fail immediately
+                    if let Some(addr) = peer {
+                        let decision = match state.rate_limiter.check(addr.ip()) {
+                            RateLimitDecision::RateLimited { retry_after_secs }
+                            | RateLimitDecision::Banned { retry_after_secs } => {
+                                RateLimitDecision::RateLimited { retry_after_secs }
+                            }
+                            RateLimitDecision::Allowed => state.rate_limiter.record_failure(addr.ip()),
+                        };
+                        if let RateLimitDecision::RateLimited { retry_after_secs }
+                        | RateLimitDecision::Banned { retry_after_secs } = decision
+                        {
+                            audit_auth_failure(&state, token_opt.as_deref(), peer);
+                            return (
+                                StatusCode::TOO_MANY_REQUESTS,
+                                [(axum::http::header::RETRY_AFTER, retry_after_secs.to_string())],
+                                Json(json!({ "error": "Too Many Requests: Rate limit exceeded" })),
+                            ).into_response();
+                        }
+                    }
+                    audit_auth_failure(&state, token_opt.as_deref(), peer);
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({ "error": format!("Unauthorized: {e:?}") })),
+                    ).into_response();
+                }
+            }
+        }
+
+        if resolved_role.is_none() && state.config.has_credentials() {
+            if let Some(role) = state.config.get_role_for_token(token) {
+                resolved_role = Some(role);
+            }
+        }
+    }
+
+    if resolved_role.is_none() {
+        if state.config.insecure_no_auth {
+            resolved_role = Some(crate::config::Role::Admin);
+        } else if peer_loopback && !state.config.has_credentials() && state.keystore.as_ref().map(|k| !k.has_active_keys()).unwrap_or(true) {
+            resolved_role = Some(crate::config::Role::Admin);
+        }
+    }
+
+    let role = match resolved_role {
+        Some(r) => {
+            if let Some(addr) = peer {
+                state.rate_limiter.record_success(addr.ip());
+            }
+            r
+        }
         None => {
+            if let Some(addr) = peer {
+                let decision = match state.rate_limiter.check(addr.ip()) {
+                    RateLimitDecision::RateLimited { retry_after_secs }
+                    | RateLimitDecision::Banned { retry_after_secs } => {
+                        RateLimitDecision::RateLimited { retry_after_secs }
+                    }
+                    RateLimitDecision::Allowed => state.rate_limiter.record_failure(addr.ip()),
+                };
+                if let RateLimitDecision::RateLimited { retry_after_secs }
+                | RateLimitDecision::Banned { retry_after_secs } = decision
+                {
+                    audit_auth_failure(&state, token_opt.as_deref(), peer);
+                    return (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        [(axum::http::header::RETRY_AFTER, retry_after_secs.to_string())],
+                        Json(json!({ "error": "Too Many Requests: Rate limit exceeded" })),
+                    ).into_response();
+                }
+            }
             audit_auth_failure(&state, token_opt.as_deref(), peer);
             return (
                 StatusCode::UNAUTHORIZED,
@@ -205,12 +325,37 @@ pub async fn auth_layer(
         }
     };
 
+    // Handler-level RBAC gate (A7 / G1-3)
+    if let Some(min_role) = crate::config::handler_min_role(req.uri().path(), req.method().as_str()) {
+        if role < min_role {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": format!("Forbidden: requires role '{min_role}', current role is '{role}'")
+                })),
+            )
+                .into_response();
+        }
+    }
+
     req.extensions_mut().insert(role);
     if let Some(t) = token_opt {
         req.extensions_mut().insert(t);
     }
+    if let Some(p) = principal_opt {
+        req.extensions_mut().insert(p);
+    }
 
-    next.run(req).await
+    let mut response = next.run(req).await;
+
+    if is_query {
+        response.headers_mut().insert(
+            axum::http::header::WARNING,
+            axum::http::HeaderValue::from_static("199 - \"API key in query parameters is deprecated and insecure\""),
+        );
+    }
+
+    response
 }
 
 /// Records an AUTH_FAILED audit event. The token is always redacted to a

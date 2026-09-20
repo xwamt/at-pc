@@ -17,6 +17,17 @@ export function readAuthToken(opts = {}) {
   const urlToken = params.get("token") || params.get("pin");
   if (urlToken) {
     store.setItem(TOKEN_KEY, urlToken);
+    try {
+      const win = typeof window !== "undefined" ? window : globalThis.window;
+      const doc = typeof document !== "undefined" ? document : globalThis.document;
+      if (win && win.history && typeof win.history.replaceState === "function") {
+        const title = doc ? doc.title : "";
+        const pathname = win.location ? win.location.pathname : "";
+        win.history.replaceState({}, title, pathname);
+      }
+    } catch {
+      // ignore in environments without history support
+    }
     return urlToken;
   }
   return store.getItem(TOKEN_KEY) || "";
@@ -67,6 +78,10 @@ export const restPaths = {
   desktopFrame: (id) => `/api/terminals/${encodeURIComponent(id)}/desktop/frame`,
   desktopFrameRaw: (id) => `/api/terminals/${encodeURIComponent(id)}/desktop/frame.jpg`,
   desktopInput: (id) => `/api/terminals/${encodeURIComponent(id)}/desktop/input`,
+  authMe: () => "/api/auth/me",
+  keys: () => "/api/keys",
+  key: (id) => `/api/keys/${encodeURIComponent(id)}`,
+  rotateKey: (id) => `/api/keys/${encodeURIComponent(id)}/rotate`,
 };
 
 /**

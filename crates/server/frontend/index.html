@@ -30,6 +30,9 @@
           <span class="dot pulse" style="background: #f59e0b; box-shadow: 0 0 8px #f59e0b;"></span>
           <span>⚡ 运行中任务 (<b id="runningCallsCount">0</b>)</span>
         </button>
+        <button id="keysBtn" class="btn btn-secondary btn-sm" onclick="showKeysModal()" style="display: none; align-items: center; gap: 6px;">
+          <span>🔑 API 密钥</span>
+        </button>
         <button id="mcpConfigBtn" class="btn btn-secondary btn-sm" onclick="showMcpConfigModal()">📋 复制 MCP 配置</button>
       </div>
     </header>
@@ -71,9 +74,9 @@
         <h3 style="font-size: 15px; font-weight: 700; color: #fff;">🔐 访问凭据认证</h3>
       </div>
       <div class="modal-body">
-        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">服务端已开启鉴权保护，请输入访问令牌 (Token) 以获取终端拓扑与执行控制操作：</p>
-        <input type="password" id="authTokenInput" class="form-input" placeholder="输入访问 Token / PIN" style="width: 100%; padding: 10px 12px; font-size: 14px; background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); color: #fff; border-radius: 6px; outline: none;" onkeydown="if(event.key==='Enter') submitAuthToken()">
-        <div id="authErrorMsg" style="color: var(--danger); font-size: 12px; margin-top: 8px; display: none;">认证失败：Token 无效或已过期</div>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">服务端已开启鉴权保护，请输入 API Key 以获取终端拓扑与执行控制操作：</p>
+        <input type="password" id="authTokenInput" class="form-input" placeholder="输入 API Key" style="width: 100%; padding: 10px 12px; font-size: 14px; background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); color: #fff; border-radius: 6px; outline: none;" onkeydown="if(event.key==='Enter') submitAuthToken()">
+        <div id="authErrorMsg" style="color: var(--danger); font-size: 12px; margin-top: 8px; display: none;">认证失败：API Key 无效或已过期</div>
       </div>
       <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
         <button class="btn btn-primary btn-sm" onclick="submitAuthToken()">确认验证</button>

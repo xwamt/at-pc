@@ -11,6 +11,8 @@ const DASHBOARD_MODULES = [
   "src/ui.js",
   "src/desktop/session.js",
   "src/terminals/ui.js",
+  "src/keys/ui.js",
+  "src/keys/index.js",
 ];
 
 test("dashboard modules do not disable TypeScript checking", () => {

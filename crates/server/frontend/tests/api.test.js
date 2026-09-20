@@ -26,9 +26,22 @@ function memoryStorage(initial = {}) {
 
 afterEach(() => {
   mock.restoreAll();
+  delete globalThis.window;
+  delete globalThis.document;
 });
 
 test("readAuthToken prefers URL token or pin and persists it", () => {
+  const calls = [];
+  globalThis.window = {
+    history: {
+      replaceState(state, title, url) {
+        calls.push({ state, title, url });
+      },
+    },
+    location: { pathname: "/dashboard" },
+  };
+  globalThis.document = { title: "AT-PC Management" };
+
   const storage = memoryStorage();
   const fromToken = readAuthToken({
     searchParams: new URLSearchParams("token=url-token"),
@@ -36,21 +49,45 @@ test("readAuthToken prefers URL token or pin and persists it", () => {
   });
   assert.equal(fromToken, "url-token");
   assert.equal(storage.getItem("at_pc_auth_token"), "url-token");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], {
+    state: {},
+    title: "AT-PC Management",
+    url: "/dashboard",
+  });
 
   const fromPin = readAuthToken({
     searchParams: new URLSearchParams("pin=url-pin"),
     storage: memoryStorage(),
   });
   assert.equal(fromPin, "url-pin");
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1], {
+    state: {},
+    title: "AT-PC Management",
+    url: "/dashboard",
+  });
 });
 
 test("readAuthToken falls back to session storage when URL has no token", () => {
+  const calls = [];
+  globalThis.window = {
+    history: {
+      replaceState(state, title, url) {
+        calls.push({ state, title, url });
+      },
+    },
+    location: { pathname: "/dashboard" },
+  };
+  globalThis.document = { title: "AT-PC Management" };
+
   const storage = memoryStorage({ at_pc_auth_token: "stored-token" });
   const token = readAuthToken({
     searchParams: new URLSearchParams(""),
     storage,
   });
   assert.equal(token, "stored-token");
+  assert.equal(calls.length, 0);
 });
 
 test("writeAuthToken stores or clears the session token", () => {
@@ -96,6 +133,12 @@ test("restPaths encode terminal and call identifiers", () => {
     "/api/terminals/t1/desktop/frame.jpg",
   );
   assert.equal(restPaths.desktopInput("t1"), "/api/terminals/t1/desktop/input");
+  assert.equal(restPaths.authMe(), "/api/auth/me");
+  assert.equal(restPaths.keys(), "/api/keys");
+  assert.equal(restPaths.key("k1"), "/api/keys/k1");
+  assert.equal(restPaths.key("k/1"), "/api/keys/k%2F1");
+  assert.equal(restPaths.rotateKey("k1"), "/api/keys/k1/rotate");
+  assert.equal(restPaths.rotateKey("k/1"), "/api/keys/k%2F1/rotate");
 });
 
 test("authFetch injects Authorization and reports 401 without throwing", async () => {

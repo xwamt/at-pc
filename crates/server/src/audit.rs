@@ -29,6 +29,12 @@ pub const ACTION_AUTH_FAILED: &str = "AUTH_FAILED";
 /// Audit action: the server was started with `--insecure-no-auth` and is
 /// accepting unauthenticated access on a non-loopback listener.
 pub const ACTION_INSECURE_MODE: &str = "insecure_mode";
+/// Audit action: a new API key or device token was issued.
+pub const ACTION_KEY_CREATE: &str = "key:create";
+/// Audit action: an API key or device token was revoked.
+pub const ACTION_KEY_REVOKE: &str = "key:revoke";
+/// Audit action: an API key was rotated.
+pub const ACTION_KEY_ROTATE: &str = "key:rotate";
 
 type AuditResult = Result<(), String>;
 

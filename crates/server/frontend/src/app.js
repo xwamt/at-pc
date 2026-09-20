@@ -35,8 +35,30 @@ import {
   showRunningCallsModal,
 } from "./terminals/ui.js";
 import { terminalsState } from "./terminals/state.js";
-import { closeModal, hideAuthModal, setModalBeforeClose, showAuthModal, showModal } from "./ui.js";
+import {
+  closeModal,
+  copyTextToClipboard,
+  hideAuthModal,
+  setModalBeforeClose,
+  showAuthModal,
+  showModal,
+} from "./ui.js";
 import { byId } from "./dom.js";
+import {
+  checkAdminRole,
+  copyOneTimeKey,
+  openCreateKeyModal,
+  openRevokeKeyModal,
+  openRotateKeyModal,
+  refreshAdminAccess,
+  showKeysModal,
+  showOneTimeKeyModal,
+  submitCreateKey,
+  submitRevokeKey,
+  submitRotateKey,
+} from "./keys/ui.js";
+
+export { copyTextToClipboard };
 
 function handleUnauthorized() {
   terminalsState.terminalsData = [];
@@ -44,12 +66,16 @@ function handleUnauthorized() {
   if (grid) {
     grid.innerHTML = `
             <div class="empty-state">
-              <h3>🔐 请先输入访问凭据</h3>
+              <h3>🔐 请先输入 API Key</h3>
               <p style="margin-top: 8px; font-size: 13px;">服务端已开启鉴权保护，验证通过后方可加载拓扑设备</p>
-              <button class="btn btn-primary btn-sm" style="margin-top: 14px;" onclick="showAuthModal()">输入访问凭据</button>
+              <button class="btn btn-primary btn-sm" style="margin-top: 14px;" onclick="showAuthModal()">输入 API Key</button>
             </div>
           `;
   }
+  const keysBtn = byId("keysBtn");
+  if (keysBtn) keysBtn.style.display = "none";
+  const keysTabBtn = byId("keysTabBtn");
+  if (keysTabBtn) keysTabBtn.style.display = "none";
   promptAuth();
 }
 
@@ -73,38 +99,11 @@ export async function submitAuthToken() {
     hideAuthModal();
     terminalsState.terminalsData = await res.json();
     renderCards();
+    refreshAdminAccess();
   } else {
     const authError = byId("authErrorMsg");
     if (authError) authError.style.display = "block";
   }
-}
-
-export function copyTextToClipboard(text) {
-  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-    return navigator.clipboard.writeText(text);
-  }
-  return new Promise((resolve, reject) => {
-    try {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.style.position = "fixed";
-      textarea.style.left = "-9999px";
-      textarea.style.top = "-9999px";
-      textarea.setAttribute("readonly", "");
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      const success = document.execCommand("copy");
-      document.body.removeChild(textarea);
-      if (success) {
-        resolve();
-      } else {
-        reject(new Error("document.execCommand copy failed"));
-      }
-    } catch (err) {
-      reject(err);
-    }
-  });
 }
 
 export function showMcpConfigModal() {
@@ -175,6 +174,17 @@ function exposeGlobals() {
     toggleCanvasFullscreen,
     stopAndCloseDesktop,
     checkModifierCursor,
+    showKeysModal,
+    openCreateKeyModal,
+    submitCreateKey,
+    openRevokeKeyModal,
+    submitRevokeKey,
+    openRotateKeyModal,
+    submitRotateKey,
+    showOneTimeKeyModal,
+    copyOneTimeKey,
+    checkAdminRole,
+    refreshAdminAccess,
   };
   Object.assign(window, api);
 }
@@ -193,5 +203,7 @@ export function boot() {
     if (target?.id === "resultModal") closeModal();
   };
   fetchTerminals();
+  refreshAdminAccess();
   setInterval(fetchTerminals, 2000);
+  setInterval(refreshAdminAccess, 10000);
 }

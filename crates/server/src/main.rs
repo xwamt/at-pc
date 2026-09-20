@@ -44,6 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!(
             "    --log-file <PATH>     Path to server runtime log file (default: at-pc-server.log)"
         );
+        println!(
+            "    --keys-file <PATH>    Path to persistent keys file (default: <data_dir>/keys.json)"
+        );
         println!("    --no-bootstrap        Disable first-boot root API key bootstrap");
         println!(
             "    --insecure-no-auth    Opt out of authentication gate (allow non-loopback without credentials)"
@@ -201,6 +204,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if raw_args[i] == "--log-file" && i + 1 < raw_args.len() {
             config.log_file_path = Some(std::path::PathBuf::from(&raw_args[i + 1]));
         }
+        if raw_args[i] == "--keys-file" && i + 1 < raw_args.len() {
+            config.keys_file_path = Some(std::path::PathBuf::from(&raw_args[i + 1]));
+        }
+    }
+
+    if config.keys_file_path.is_none() {
+        if let Ok(path) = std::env::var("AT_PC_KEYS_FILE") {
+            config.keys_file_path = Some(std::path::PathBuf::from(path));
+        }
     }
 
     let args = Args {
@@ -229,9 +241,16 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
+    let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
+        config::default_data_dir().join("keys.json")
+    });
+    let keystore = at_pc_server::keystore::KeyStore::load_or_create(&keys_file).ok();
+    let has_keystore_keys = keystore.as_ref().map(|k| k.has_active_keys()).unwrap_or(false);
+    let has_creds = config.has_credentials() || has_keystore_keys;
+
     if let Err(e) = config::validate_boot_gate(
         &config,
-        config.has_credentials(),
+        has_creds,
         config.insecure_no_auth,
     ) {
         eprintln!("{e}");
