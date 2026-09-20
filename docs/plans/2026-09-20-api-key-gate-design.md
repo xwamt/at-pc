@@ -4,6 +4,7 @@
 - 范围：`crates/server`（HTTP/MCP 网关 + Web 控制台）、`crates/agent`（设备接入）、`crates/protocol`（Role 契约）、部署清单
 - 基线：`HEAD = 855b082`（本地 `main`，远端 `origin/main` 停在 `9c41689`）
 - 关联文档：`2026-09-20-perception-channel-audit.md`（感知通道）、`2026-09-16-added-content-verification.md`（内容核对，冲突以此为准）
+- **实施落地以 `2026-09-20-api-key-gate-implementation-plan.md` 为准**：该文件给出文件级/行级任务分解、每个里程碑的可执行检验程序，以及修改项与现状台账。本文保留"为什么这么做"的完整论证；两者冲突时以实施计划为准（例如下文 §5.5 与 §6 提到的 `into_make_service` 实际是**两处**，实施计划 M0-6 已修正）。
 
 ---
 
