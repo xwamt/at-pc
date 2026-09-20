@@ -31,6 +31,10 @@ rustls-pemfile = { workspace = true }
 rustls-pki-types = { workspace = true }
 axum-server = { workspace = true }
 same-file = { workspace = true }
+tray-icon = { workspace = true }
+muda = { workspace = true }
+winit = { workspace = true }
+image = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

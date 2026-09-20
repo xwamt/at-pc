@@ -38,6 +38,8 @@ tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 rustls-pki-types = { workspace = true }
 webpki-roots = { workspace = true }
+tray-icon = { workspace = true }
+muda = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = [
