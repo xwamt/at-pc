@@ -833,4 +833,80 @@ $ git diff 45067bb..HEAD -- crates/server/tests/p1_auth_rbac_call_id_test.rs cra
 
 **修复优先级**：P1-24 → 发布说明补 `deny_unknown_fields` 破坏性变更 → P3-25 默认 scope 按 kind 分流 → 其余历史残留。
 
+---
+
+## 13. 轮次 6（本次）：P1-24 整改的独立复验
+
+**基线**：用户提交 `26c38d6`（`fix(server): fail closed on corrupt keystore (P1-24)`，`c997bbd..26c38d6` = bootstrap.rs +98 / main.rs +41 / mcp/mod.rs +17）。本节全部结论来自**运行时实测**（真实 release 二进制，按 Dockerfile 口径 `--no-default-features` 构建），非读码推断。
+
+### 13.1 整改内容（逐条）
+
+| 位置 | 改动 | 作用 |
+|---|---|---|
+| `bootstrap.rs:201-229` | 原 `if let Ok(store)` → 改为 `load_or_create(...).map_err(...)?`；再加"无活跃 key"分支返回 `Err` | 密钥库存在但不可用时**不再生成幻影 root key**，并给出恢复指引 |
+| `main.rs:336-344` | bootstrap 的 `Err` 由 `error!` 后**继续**改为 `eprintln!("FATAL…") + exit(1)` | 建立不起 root key 就不启动 |
+| `main.rs:351-364` | `load_or_create(&keys_file).ok().map(Arc::new)` → 显式 `match`，`Err` 打印原因并 `exit(1)` | 消除"凭据在盘上但解析不了"被降级成"没配凭据"的静默路径 |
+| `mcp/mod.rs:328` | `unwrap_or(true)` → `unwrap_or(false)` | 关闭 `keystore=None` ⇒ 回环自动授 Admin 的 fail-open |
+| `mcp/mod.rs:134-152` | 回落构造里 `.ok()` → `match` + `tracing::error!` | 同源缺陷不再静默 |
+| `bootstrap.rs` 测试 | 新增 `bootstrap_refuses_to_generate_on_corrupt_keystore`、`bootstrap_refuses_to_generate_when_store_has_no_active_key` | 锁死两个 fail-closed 分支 |
+
+### 13.2 运行时复现矩阵（修前 → 修后）
+
+**修前（`c997bbd` 构建，轮次 5 实测）**：`keys.json` 截断为 `{"keys":[{"id":"abc` 时，服务**正常启动**、打印"这是你的新 root key"横幅、生成 `bootstrap_key.txt`；**无凭据 `GET /api/keys` = 200**、乱造 token = 200、无凭据 `GET /api/logs` = 200、无凭据 `POST /api/keys` = 500；日志中 keystore / keys.json 告警 **0 条**、`insecure_mode` 审计 **0 条**。
+
+**修后（`26c38d6` 构建，本节实测）**：
+
+| 场景 | 结果 |
+|---|---|
+| **S1** `keys.json` 截断、无 `bootstrap_key.txt` | `exit=1`、端口 **0** 监听、**无横幅**、**未生成** `bootstrap_key.txt`、原 `keys.json` **未被覆盖**、curl 探测 = `000`（连不上） |
+| **S2** 同上但 `bootstrap_key.txt` 存在 | `exit=1`、无横幅；报 `FATAL: failed to load key store … Refusing to start` |
+| **S3** `keys.json` = `{"keys":[]}` | `exit=1`，报 `exists but holds no active (unrevoked) key … or delete it to re-initialize` |
+| **S4** `keys.json` 为零字节 | `exit=1`，同上 |
+| **S5** 健康库首启 | BOOTED、横幅 YES；root key → **200**、无凭据 → **401**、乱造 token → **401**、无凭据 `/api/logs` → **401** |
+| **S6** 健康库删掉 `bootstrap_key.txt` 后重启 | BOOTED、**无横幅**、**不重建**、旧 root key 仍 **200**（P1-19 未回归） |
+| **S7** `--no-bootstrap` + 空库 + 回环 | BOOTED、无凭据 → **200**（开发态按设计保留；`deploy/verify_gate.sh` 的 G0-3 同证） |
+
+即：**"运维以为门禁正常、实际门禁不在"这条链路已断**——不可用时要么拒绝启动，要么（健康态）真正 401。
+
+### 13.3 🔴 复验中新发现的同源缺陷 P1-27（已一并闭环）
+
+复验中发现 P1-24 的修法**只覆盖了"默认 keys 文件路径"**，`--keys-file` 这条文档化路径（`main.rs:48` CLI 帮助里有）仍能造出幻影：
+
+- **修前实测**：`--keys-file /tmp/…/customdir/keys.json` 首启 → `bootstrap_key.txt` 写进 `default_data_dir()`，而 `KeyStore::load_or_create` 只在 `keys_file.parent()` 找它 ⇒ `keys.json` 落成 `{"keys":[],"version":1}` **空库**；横幅照常打印 root key；实测 `root key → 200` 且 **`无凭据 → 200`**（空库被当成"未配凭据"，回环自动 Admin）⇒ **门禁静默失效，且 root key 其实是假的**。
+- **修法**：新增 `bootstrap::keystore_sidecar_dir(&keys_file)` 统一两侧解析规则（空路径/裸相对路径按 CWD，与 keystore 的 `path.parent().unwrap_or(".")` 等价），`main.rs` 用它决定写入目录，并用 `print_bootstrap_banner_with_file` 打印**真实**路径。
+- **复验**（三种形态，落点/横幅/记录数/鉴权四项全对）：
+
+| 形态 | `bootstrap_key.txt` 落点 | 横幅声称路径 | `keys.json` 记录数 | root / 无凭据 / 乱造 |
+|---|---|---|---|---|
+| 默认（无 `--keys-file`） | `<data_dir>/` | 同左 | 1 (`bootstrap-root`) | 200 / 401 / 401 |
+| `--keys-file <绝对自定义>` | `<自定义>/` | 同左 | 1 (`bootstrap-root`) | 200 / 401 / 401 |
+| `--keys-file keys.json`（相对） | CWD | `./bootstrap_key.txt` | 1 (`bootstrap-root`) | 200 / 401 / 401 |
+
+### 13.4 连带回归
+
+> 下列数据在**最终源码树**（含 §13.3 的 P1-27 重构之后）重新跑过一遍，非中间态快照。
+
+| 项 | 结果 |
+|---|---|
+| `cargo test --workspace` | **395 passed / 0 failed / 1 ignored**（轮次 5 为 393 → +2 = 本轮新增的两条 fail-closed 回归用例） |
+| `deploy/verify_gate.sh --fast` | **8/8 PASS，EXIT=0**（G0-3 回环开发态、G0-4 bootstrap 0600+幂等均未回归） |
+| 前端 lint / typecheck / test | **0 / 0 / 34-0** |
+| `cargo clippy -p at-pc-server --no-default-features` | 3 条警告，位置 `mcp/mod.rs:326`（两个 Admin 分支同体）、`mcp/mod.rs:631`（`format!("/messages")`）、`main.rs:253`（迁移循环遍历 map）——**均在本次未触碰的既有代码**，非本轮引入 |
+| `cargo fmt` | **未执行**：仓库整体非 rustfmt-clean（全 crate 大量 diff，含 agent/keystore/dashboard 等未改动文件），执行会产生无关巨型 diff。属既有状态，非本轮引入 |
+
+### 13.5 行为变更声明（建议进发布说明）
+
+1. **`keys.json` 不可解析 ⇒ 拒绝启动**（原：静默降级为"无凭据"，回环下等于门禁关闭）。
+2. **`keys.json` 存在但无活跃 key ⇒ 拒绝启动**。触发面：全部 key 被吊销后重启；或先用 `--no-bootstrap` 跑出空库、之后去掉该参数重启。恢复方式已写进错误信息（备份恢复，或删除 `keys.json` 重新初始化，**后者会吊销全部既有 key**）。
+3. **`--keys-file` 指向自定义目录时，`bootstrap_key.txt` 现在与 `keys.json` 同目录**（原：默认数据目录）。对已有部署无影响——`keys.json` 里已有活跃 key，重启走 `Skipped` 分支，不会重建。
+
+### 13.6 复验判定
+
+**判定：P1-24 已闭环；§12.5 的放行条件已满足。**
+
+- §12 提出的放行条件——"修掉 P1-24（加载失败 ⇒ 报错退出、不打印横幅）"——**已按原意落实**，且我在运行时逐场景反证（S1–S7 + 三种 keys-file 形态）。
+- 复验中另发现同源缺陷 **P1-27**（`--keys-file` 落点不一致仍能造幻影 + 门禁静默失效），**已一并修复并复验**；因此本次整改是**完整**的：banner 不再可能为"不可认证的 root key"背书。
+- **不阻断项（历史延续，本轮未动，与本判定无关）**：P2-22（登录限速只信 `ConnectInfo`）、P3-17（`mcp/mod.rs:218` `peer_loopback` fail-open）、P3-25（默认 scope 不区分 kind 的纵深防御）、G0-6 / G0-9（验收脚本仍 8 项）、M3-2（前端仍 `sessionStorage` + Bearer）；发布说明仍待补 `deny_unknown_fields` 破坏性变更提示。
+- 仍建议：发布说明中同步写入 §13.5 的三条行为变更。
+
 
