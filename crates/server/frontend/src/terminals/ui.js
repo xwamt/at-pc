@@ -50,8 +50,8 @@ export async function fetchTerminals() {
     if (res.ok) {
       terminalsState.terminalsData = await res.json();
       renderCards();
+      checkRunningCalls();
     }
-    checkRunningCalls();
   } catch (err) {
     console.error("Failed to fetch terminals:", err);
   }

@@ -162,9 +162,11 @@ impl eframe::App for AgentApp {
                         self.state.trigger_reconnect();
                     }
                 } else if event.id == tray.quit_id {
+                    tracing::info!("User requested quit from system tray. Shutting down...");
                     self.should_quit = true;
                     self.state.trigger_emergency_disconnect();
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    self.tray = None;
+                    std::process::exit(0);
                 }
             }
         }

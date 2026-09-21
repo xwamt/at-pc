@@ -127,7 +127,7 @@ async fn test_ws_gateway_handshake_and_registration() {
 }
 
 #[tokio::test]
-async fn test_ws_gateway_auth_failure() {
+async fn test_ws_gateway_auth_token_optional() {
     let registry = Arc::new(TerminalRegistry::new());
     let state = WsServerState::new(
         registry,
@@ -142,8 +142,8 @@ async fn test_ws_gateway_auth_failure() {
     send_json(
         &mut client_ws,
         &AgentToServerMessage::Register {
-            info: terminal_info("bad-agent"),
-            auth_token: Some("wrong_secret".to_string()),
+            info: terminal_info("agent-any-key"),
+            auth_token: Some("arbitrary_or_no_secret".to_string()),
         },
     )
     .await;
@@ -151,10 +151,10 @@ async fn test_ws_gateway_auth_failure() {
         ServerToAgentMessage::RegisterAck {
             success, message, ..
         } => {
-            assert!(!success);
-            assert!(message.unwrap().contains("Invalid authentication token"));
+            assert!(success, "Agent registration must succeed without enforcing tokens");
+            assert!(message.is_none());
         }
-        other => panic!("Expected failed RegisterAck, got {other:?}"),
+        other => panic!("Expected successful RegisterAck, got {other:?}"),
     }
 }
 

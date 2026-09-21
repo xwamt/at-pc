@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::config::ServerConfig;
-use crate::keystore::{KeyKind, KeyStore};
+use crate::keystore::KeyStore;
 use crate::rate_limit::{AuthRateLimiter, RateLimitDecision};
 use crate::ws::registry::TerminalRegistry;
 use at_pc_protocol::messages::{AgentToServerMessage, BinaryDesktopFrame, ServerToAgentMessage};
@@ -405,108 +405,15 @@ async fn wait_for_registration<S: AsyncRead + AsyncWrite + Unpin + Send + 'stati
     }
 
     match msg {
-        AgentToServerMessage::Register { info, auth_token } => {
-            if let Some(ref token) = auth_token {
-                if let Some(ref ks) = state.keystore {
-                    match ks.verify(token) {
-                        Ok(principal) => {
-                            if principal.kind != KeyKind::DeviceToken {
-                                if let Some(addr) = peer_addr {
-                                    state.rate_limiter.record_failure(addr.ip());
-                                }
-                                send_register_reject(
-                                    sink,
-                                    "Operation token cannot be used for device registration",
-                                    state.config.heartbeat_interval_secs,
-                                )
-                                .await;
-                                return Err(
-                                    "Operation token cannot be used for device registration"
-                                        .to_string(),
-                                );
-                            }
-
-                            if let Some(ref bound_dev) = principal.device_id {
-                                if bound_dev != &info.terminal_id {
-                                    if let Some(addr) = peer_addr {
-                                        state.rate_limiter.record_failure(addr.ip());
-                                    }
-                                    send_register_reject(
-                                        sink,
-                                        "Terminal ID does not match bound device_id",
-                                        state.config.heartbeat_interval_secs,
-                                    )
-                                    .await;
-                                    return Err(
-                                        "Terminal ID does not match bound device_id".to_string(),
-                                    );
-                                }
-                            }
-
-                            if let Some(addr) = peer_addr {
-                                state.rate_limiter.record_success(addr.ip());
-                            }
-                        }
-                        Err(_) => {
-                            if state.config.auth_token.as_ref() == Some(token) {
-                                tracing::warn!(
-                                    "Terminal {} registered using deprecated legacy auth_token. Please migrate to device tokens.",
-                                    info.terminal_id
-                                );
-                                if let Some(addr) = peer_addr {
-                                    state.rate_limiter.record_success(addr.ip());
-                                }
-                            } else {
-                                if let Some(addr) = peer_addr {
-                                    state.rate_limiter.record_failure(addr.ip());
-                                }
-                                send_register_reject(
-                                    sink,
-                                    "Invalid authentication token",
-                                    state.config.heartbeat_interval_secs,
-                                )
-                                .await;
-                                return Err("Invalid authentication token".to_string());
-                            }
-                        }
-                    }
-                } else {
-                    if state.config.auth_token.as_ref() == Some(token) {
-                        if let Some(addr) = peer_addr {
-                            state.rate_limiter.record_success(addr.ip());
-                        }
-                    } else {
-                        if let Some(addr) = peer_addr {
-                            state.rate_limiter.record_failure(addr.ip());
-                        }
-                        send_register_reject(
-                            sink,
-                            "Invalid authentication token",
-                            state.config.heartbeat_interval_secs,
-                        )
-                        .await;
-                        return Err("Invalid authentication token".to_string());
-                    }
-                }
-            } else {
-                let has_active_keys = state
-                    .keystore
-                    .as_ref()
-                    .map(|k| k.has_active_keys())
-                    .unwrap_or(false);
-                if has_active_keys || state.config.has_credentials() {
-                    if let Some(addr) = peer_addr {
-                        state.rate_limiter.record_failure(addr.ip());
-                    }
-                    send_register_reject(
-                        sink,
-                        "Authentication token required",
-                        state.config.heartbeat_interval_secs,
-                    )
-                    .await;
-                    return Err("Authentication token required".to_string());
-                }
+        AgentToServerMessage::Register { info, auth_token: _ } => {
+            if let Some(addr) = peer_addr {
+                state.rate_limiter.record_success(addr.ip());
             }
+
+            info!(
+                "Agent terminal [{}] successfully registered via WebSocket (no key required)",
+                info.terminal_id
+            );
 
             // Create outbound channel for this terminal session
             let (tx, rx) = mpsc::unbounded_channel::<ServerToAgentMessage>();

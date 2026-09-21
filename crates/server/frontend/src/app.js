@@ -60,7 +60,10 @@ import {
 
 export { copyTextToClipboard };
 
+let isAuthRequired = false;
+
 function handleUnauthorized() {
+  isAuthRequired = true;
   terminalsState.terminalsData = [];
   const grid = byId("terminalGrid");
   if (grid) {
@@ -105,6 +108,7 @@ export async function submitAuthToken() {
       setAuthToken(token);
       const res = await authFetch(restPaths.terminals());
       if (res.ok) {
+        isAuthRequired = false;
         hideAuthModal();
         terminalsState.terminalsData = await res.json();
         renderCards();
@@ -148,6 +152,7 @@ export async function submitAuthToken() {
       setAuthToken(token);
       const res = await authFetch(restPaths.terminals());
       if (res.ok) {
+        isAuthRequired = false;
         if (authError) authError.style.display = "none";
         hideAuthModal();
         terminalsState.terminalsData = await res.json();
@@ -267,6 +272,14 @@ export function boot() {
   };
   fetchTerminals();
   refreshAdminAccess();
-  setInterval(fetchTerminals, 2000);
-  setInterval(refreshAdminAccess, 10000);
+  setInterval(() => {
+    if (!isAuthRequired) {
+      fetchTerminals();
+    }
+  }, 2000);
+  setInterval(() => {
+    if (!isAuthRequired) {
+      refreshAdminAccess();
+    }
+  }, 10000);
 }

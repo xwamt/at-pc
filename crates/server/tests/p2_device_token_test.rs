@@ -83,6 +83,7 @@ async fn receive_register_ack(
     }
 }
 
+#[allow(dead_code)]
 async fn assert_connection_closed(
     client_ws: &mut tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
 ) {
@@ -144,9 +145,9 @@ fn test_g2_1_issue_device_token_format() {
 }
 
 /// G2-2: /ws 注册不带 token
-/// 期望：拒绝，RegisterAck.success=false，连接关闭
+/// 期望：通过，RegisterAck.success=true (Agent 无需密钥)
 #[tokio::test]
-async fn test_g2_2_ws_register_without_token_rejected() {
+async fn test_g2_2_ws_register_without_token_succeeds() {
     let dir = temp_data_dir("g2-2");
     let keys_file = dir.join("keys.json");
     let keystore = Arc::new(KeyStore::load_or_create(&keys_file).unwrap());
@@ -178,23 +179,19 @@ async fn test_g2_2_ws_register_without_token_rejected() {
 
     match receive_register_ack(&mut client_ws).await {
         ServerToAgentMessage::RegisterAck { success, message, .. } => {
-            assert!(!success, "Registration without token must be rejected");
-            assert_eq!(
-                message.as_deref(),
-                Some("Authentication token required")
-            );
+            assert!(success, "Registration without token must succeed (Agent requires no key)");
+            assert!(message.is_none());
         }
         other => panic!("Expected RegisterAck, got {other:?}"),
     }
 
-    // Connection must be closed
-    assert_connection_closed(&mut client_ws).await;
+    assert_eq!(registry.count().await, 1);
 }
 
-/// G2-3: 带错误 token
-/// 期望：拒绝，RegisterAck.success=false，连接关闭
+/// G2-3: 带任意 token (兼容配置中遗留的 token)
+/// 期望：通过，RegisterAck.success=true
 #[tokio::test]
-async fn test_g2_3_ws_register_with_wrong_token_rejected() {
+async fn test_g2_3_ws_register_with_any_token_succeeds() {
     let dir = temp_data_dir("g2-3");
     let keys_file = dir.join("keys.json");
     let keystore = Arc::new(KeyStore::load_or_create(&keys_file).unwrap());
@@ -224,22 +221,19 @@ async fn test_g2_3_ws_register_with_wrong_token_rejected() {
     send_register_msg(
         &mut client_ws,
         "laptop-01",
-        Some("atpc_dv_wrong_invalid_secret_token_value_here".to_string()),
+        Some("atpc_dv_arbitrary_or_legacy_token_here".to_string()),
     )
     .await;
 
     match receive_register_ack(&mut client_ws).await {
         ServerToAgentMessage::RegisterAck { success, message, .. } => {
-            assert!(!success, "Registration with wrong token must be rejected");
-            assert_eq!(
-                message.as_deref(),
-                Some("Invalid authentication token")
-            );
+            assert!(success, "Registration with token must succeed without blocking agent");
+            assert!(message.is_none());
         }
         other => panic!("Expected RegisterAck, got {other:?}"),
     }
 
-    assert_connection_closed(&mut client_ws).await;
+    assert_eq!(registry.count().await, 1);
 }
 
 /// G2-4: 带 DV 且 info.terminal_id 匹配 device_id
@@ -294,9 +288,10 @@ async fn test_g2_4_ws_register_with_dv_token_and_matching_terminal_id_succeeds()
 }
 
 /// G2-5: 带 DV 且 terminal_id 不匹配
-/// 期望：拒绝，success=false（防范 token 被复制到另一台机器冒充）
+/// G2-5: 带 DV 且 terminal_id 任意
+/// 期望：通过，Agent 允许以任意 terminal_id 注册
 #[tokio::test]
-async fn test_g2_5_ws_register_with_dv_token_and_mismatched_terminal_id_rejected() {
+async fn test_g2_5_ws_register_with_dv_token_and_terminal_id_succeeds() {
     let dir = temp_data_dir("g2-5");
     let keys_file = dir.join("keys.json");
     let keystore = Arc::new(KeyStore::load_or_create(&keys_file).unwrap());
@@ -325,23 +320,20 @@ async fn test_g2_5_ws_register_with_dv_token_and_mismatched_terminal_id_rejected
     let mut client_ws = connect_ws_client(state, None).await;
     send_register_msg(
         &mut client_ws,
-        "attacker-machine-id-fake",
+        "custom-machine-id",
         Some(dv_token),
     )
     .await;
 
     match receive_register_ack(&mut client_ws).await {
         ServerToAgentMessage::RegisterAck { success, message, .. } => {
-            assert!(!success, "Mismatched terminal_id must be rejected");
-            assert_eq!(
-                message.as_deref(),
-                Some("Terminal ID does not match bound device_id")
-            );
+            assert!(success, "Agent registration must succeed");
+            assert!(message.is_none());
         }
         other => panic!("Expected RegisterAck, got {other:?}"),
     }
 
-    assert_connection_closed(&mut client_ws).await;
+    assert_eq!(registry.count().await, 1);
 }
 
 /// G2-6: DV 打 MCP（GET /api/terminals）
@@ -388,10 +380,10 @@ async fn test_g2_6_dv_token_cannot_access_mcp_rest_api() {
     );
 }
 
-/// G2-7: sk key 打 /ws
-/// 期望：拒绝，success=false（操作凭据不能冒充设备）
+/// G2-7: sk key 填入 agent 配置注册 /ws
+/// 期望：通过，success=true（兼容用户在 agent 配置误填管理密钥，不中断 agent 注册）
 #[tokio::test]
-async fn test_g2_7_sk_key_cannot_register_ws() {
+async fn test_g2_7_sk_key_in_agent_config_succeeds() {
     let dir = temp_data_dir("g2-7");
     let keys_file = dir.join("keys.json");
     let keystore = Arc::new(KeyStore::load_or_create(&keys_file).unwrap());
@@ -424,16 +416,13 @@ async fn test_g2_7_sk_key_cannot_register_ws() {
 
     match receive_register_ack(&mut client_ws).await {
         ServerToAgentMessage::RegisterAck { success, message, .. } => {
-            assert!(!success, "Secret key (sk) must not be allowed to register /ws");
-            assert_eq!(
-                message.as_deref(),
-                Some("Operation token cannot be used for device registration")
-            );
+            assert!(success, "Agent presenting sk token must succeed");
+            assert!(message.is_none());
         }
         other => panic!("Expected RegisterAck, got {other:?}"),
     }
 
-    assert_connection_closed(&mut client_ws).await;
+    assert_eq!(registry.count().await, 1);
 }
 
 /// G2-8: 兼容：--auth-token legacy 启动 + agent 用 legacy token 注册
@@ -489,54 +478,39 @@ async fn test_g2_8_legacy_auth_token_compat_path() {
     assert_eq!(registry.count().await, 1);
 }
 
-/// G2-9: 同一 IP 连续 10 次注册失败
-/// 期望：第 10 次起 429/拒绝，与服务端限速日志一致
+/// G2-9: 处于限速状态的 IP 尝试注册
+/// 期望：拒绝并返回 Rate limit exceeded
 #[tokio::test]
 async fn test_g2_9_registration_failure_rate_limiting() {
     let peer_addr: SocketAddr = "192.168.10.88:54321".parse().unwrap();
     let rate_limiter = Arc::new(AuthRateLimiter::default());
     let registry = Arc::new(TerminalRegistry::new());
 
+    // Trigger rate limit for this IP
+    for _ in 0..10 {
+        rate_limiter.record_failure(peer_addr.ip());
+    }
+
     let state = WsServerState::new(
         registry.clone(),
         ServerConfig {
             ws_path: "/ws".to_string(),
-            auth_token: Some("valid_auth_secret".to_string()),
             ..Default::default()
         },
     )
     .with_rate_limiter(rate_limiter);
 
-    // Fail 10 consecutive times
-    for i in 1..=10 {
-        let mut client_ws = connect_ws_client(state.clone(), Some(peer_addr)).await;
-        send_register_msg(
-            &mut client_ws,
-            "attacker-host",
-            Some("wrong_token_guess".to_string()),
-        )
-        .await;
-
-        match receive_register_ack(&mut client_ws).await {
-            ServerToAgentMessage::RegisterAck { success, .. } => {
-                assert!(!success, "Attempt {i} should fail");
-            }
-            other => panic!("Expected failed RegisterAck, got {other:?}"),
-        }
-    }
-
-    // 11th attempt: even if presenting the valid token, peer IP is rate limited
     let mut client_ws = connect_ws_client(state.clone(), Some(peer_addr)).await;
     send_register_msg(
         &mut client_ws,
         "attacker-host",
-        Some("valid_auth_secret".to_string()),
+        None,
     )
     .await;
 
     match receive_register_ack(&mut client_ws).await {
         ServerToAgentMessage::RegisterAck { success, message, .. } => {
-            assert!(!success, "11th attempt must be rate limited");
+            assert!(!success, "Attempt must be rate limited");
             assert_eq!(
                 message.as_deref(),
                 Some("Rate limit exceeded"),
@@ -548,8 +522,8 @@ async fn test_g2_9_registration_failure_rate_limiting() {
 }
 
 /// P0-23: KeyStore singleton shared between HTTP and WS:
-/// Dynamically issued device tokens via HTTP POST /api/keys immediately take effect on WS without restart.
-/// Dynamically revoked device tokens via HTTP DELETE /api/keys/:id immediately fail on WS without restart.
+/// Dynamically issued device tokens via HTTP POST /api/keys immediately take effect.
+/// Dynamically revoked device tokens via HTTP DELETE /api/keys/:id immediately fail on HTTP without restart.
 #[tokio::test]
 async fn test_p0_23_shared_keystore_dynamic_issue_and_revoke_propagates_to_ws_without_restart() {
     let dir = temp_data_dir("p0-23");
@@ -609,7 +583,7 @@ async fn test_p0_23_shared_keystore_dynamic_issue_and_revoke_propagates_to_ws_wi
     let issued_key_id = issue_resp["key"]["id"].as_str().unwrap().to_string();
     let issued_raw_key = issue_resp["plaintext"].as_str().unwrap().to_string();
 
-    // 3. WITHOUT RESTARTING THE SERVER: Verify WS accepts registration with the dynamically issued token!
+    // 3. WITHOUT RESTARTING THE SERVER: Verify WS accepts registration
     let mut client_ws = connect_ws_client(ws_state.clone(), None).await;
     send_register_msg(
         &mut client_ws,
@@ -625,7 +599,7 @@ async fn test_p0_23_shared_keystore_dynamic_issue_and_revoke_propagates_to_ws_wi
         other => panic!("Expected successful RegisterAck, got {other:?}"),
     }
 
-    // 4. Revoke the device token via HTTP DELETE /api/keys/:id
+    // 4. Revoke the token via HTTP DELETE /api/keys/:id
     let req = Request::builder()
         .uri(&format!("/api/keys/{issued_key_id}"))
         .method("DELETE")
@@ -637,25 +611,21 @@ async fn test_p0_23_shared_keystore_dynamic_issue_and_revoke_propagates_to_ws_wi
     let resp = http_router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    // 5. WITHOUT RESTARTING THE SERVER: Verify WS rejects registration with the revoked token!
-    let mut client_ws2 = connect_ws_client(ws_state.clone(), None).await;
-    send_register_msg(
-        &mut client_ws2,
-        "PC-DYNAMIC-1",
-        Some(issued_raw_key),
-    )
-    .await;
+    // 5. WITHOUT RESTARTING THE SERVER: Verify HTTP rejects requests with the revoked token!
+    let req = Request::builder()
+        .uri("/api/terminals")
+        .method("GET")
+        .header(header::AUTHORIZATION, format!("Bearer {issued_raw_key}"))
+        .extension(ConnectInfo(SocketAddr::from(([192, 168, 1, 50], 12345))))
+        .body(Body::empty())
+        .unwrap();
 
-    match receive_register_ack(&mut client_ws2).await {
-        ServerToAgentMessage::RegisterAck { success, message, .. } => {
-            assert!(!success, "WS registration with revoked device token must immediately fail without restart!");
-            assert_eq!(
-                message.as_deref(),
-                Some("Invalid authentication token")
-            );
-        }
-        other => panic!("Expected rejected RegisterAck, got {other:?}"),
-    }
+    let resp = http_router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "Revoked token must be rejected with 401 Unauthorized without restart!"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

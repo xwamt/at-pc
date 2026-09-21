@@ -344,7 +344,13 @@ pub async fn auth_layer(
                     | RateLimitDecision::Banned { retry_after_secs } => {
                         RateLimitDecision::RateLimited { retry_after_secs }
                     }
-                    RateLimitDecision::Allowed => state.rate_limiter.record_failure(addr.ip()),
+                    RateLimitDecision::Allowed => {
+                        if token_opt.is_some() {
+                            state.rate_limiter.record_failure(addr.ip())
+                        } else {
+                            RateLimitDecision::Allowed
+                        }
+                    }
                 };
                 if let RateLimitDecision::RateLimited { retry_after_secs }
                 | RateLimitDecision::Banned { retry_after_secs } = decision
