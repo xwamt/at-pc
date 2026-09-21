@@ -114,7 +114,13 @@ export function sendDesktopInput(terminalId, event) {
     return;
   }
 
-  // Fallback REST call for when WS is still connecting
+  // Never send high-frequency MouseMove events via HTTP fallback
+  // Continuous mouse tracking without an active WebSocket would instantly exhaust the API rate limit.
+  if (event && (event.action === "MouseMove" || event.action === "MouseMovePixel")) {
+    return;
+  }
+
+  // Fallback REST call only for discrete clicks/keys when WS is still connecting
   authFetch(restPaths.desktopInput(terminalId), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -311,20 +317,6 @@ export async function openRemoteDesktop(terminalId) {
       `;
   showModal(`🖥️ 远程桌面直控 - [${terminalId}]`, html, true);
 
-  try {
-    await authFetch(restPaths.desktopStream(terminalId), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fps: 15,
-        quality: 55,
-        display_index: desktopState.currentStreamDisplayIndex,
-      }),
-    });
-  } catch (err) {
-    console.error("Start stream failed", err);
-  }
-
   authFetch(restPaths.invoke(terminalId), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -484,6 +476,7 @@ export function setupRemoteDesktopInteractions(terminalId) {
         throw new Error("服务端未返回有效票据");
       }
 
+      const wrapper = byId("rdMainWrapper");
       const dpr = window.devicePixelRatio || 1;
       const boxW = wrapper ? wrapper.clientWidth : 1280;
       const physicalW = Math.round(boxW * dpr);
@@ -705,13 +698,6 @@ export async function stopAndCloseDesktop() {
   desktopState.isLocalMouseDown = false;
   desktopState.isIdleStandby = false;
 
-  if (tid) {
-    try {
-      await authFetch(restPaths.desktopStop(tid), { method: "POST" });
-    } catch {
-      /* ignore stop errors */
-    }
-  }
   const modal = byId("resultModal");
   if (modal) modal.style.display = "none";
 }
