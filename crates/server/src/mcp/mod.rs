@@ -390,33 +390,41 @@ pub async fn auth_layer(
         }
     }
 
-    let key_id = principal_opt
-        .as_ref()
-        .map(|p| p.id.as_str())
-        .unwrap_or("legacy");
-    let quota = state.quota_tracker.check_and_record(key_id);
-    if !quota.allowed {
-        let mut response = (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({ "error": "Too Many Requests: Request quota exceeded" })),
-        )
-            .into_response();
-        let headers = response.headers_mut();
-        if let Ok(v) = quota.reset_secs.to_string().parse() {
-            headers.insert(axum::http::header::RETRY_AFTER, v);
+    let path = req.uri().path();
+    let is_streaming_channel = path.contains("/desktop/");
+
+    let quota_opt = if !is_streaming_channel {
+        let key_id = principal_opt
+            .as_ref()
+            .map(|p| p.id.as_str())
+            .unwrap_or("legacy");
+        let quota = state.quota_tracker.check_and_record(key_id);
+        if !quota.allowed {
+            let mut response = (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({ "error": "Too Many Requests: Request quota exceeded" })),
+            )
+                .into_response();
+            let headers = response.headers_mut();
+            if let Ok(v) = quota.reset_secs.to_string().parse() {
+                headers.insert(axum::http::header::RETRY_AFTER, v);
+            }
+            if let Ok(v) = quota.limit.to_string().parse() {
+                headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
+            }
+            headers.insert(
+                axum::http::HeaderName::from_static("x-ratelimit-remaining"),
+                axum::http::HeaderValue::from_static("0"),
+            );
+            if let Ok(v) = quota.reset_secs.to_string().parse() {
+                headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
+            }
+            return response;
         }
-        if let Ok(v) = quota.limit.to_string().parse() {
-            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
-        }
-        headers.insert(
-            axum::http::HeaderName::from_static("x-ratelimit-remaining"),
-            axum::http::HeaderValue::from_static("0"),
-        );
-        if let Ok(v) = quota.reset_secs.to_string().parse() {
-            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
-        }
-        return response;
-    }
+        Some(quota)
+    } else {
+        None
+    };
 
     req.extensions_mut().insert(role);
     if let Some(t) = token_opt {
@@ -435,15 +443,17 @@ pub async fn auth_layer(
         );
     }
 
-    let headers = response.headers_mut();
-    if let Ok(v) = quota.limit.to_string().parse() {
-        headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
-    }
-    if let Ok(v) = quota.remaining.to_string().parse() {
-        headers.insert(axum::http::HeaderName::from_static("x-ratelimit-remaining"), v);
-    }
-    if let Ok(v) = quota.reset_secs.to_string().parse() {
-        headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
+    if let Some(quota) = quota_opt {
+        let headers = response.headers_mut();
+        if let Ok(v) = quota.limit.to_string().parse() {
+            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
+        }
+        if let Ok(v) = quota.remaining.to_string().parse() {
+            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-remaining"), v);
+        }
+        if let Ok(v) = quota.reset_secs.to_string().parse() {
+            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
+        }
     }
 
     response

@@ -399,11 +399,14 @@ pub fn handler_min_role(path: &str, method: &str) -> Option<Role> {
     if method == "POST" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/stop") {
         return Some(Role::Operator);
     }
-    if method == "GET" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/frame") {
+    if method == "GET" && trimmed_path.starts_with("/api/terminals/") && (trimmed_path.ends_with("/desktop/frame") || trimmed_path.ends_with("/desktop/frame.jpg")) {
         return Some(Role::Viewer);
     }
     if method == "GET" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/raw") {
         return Some(Role::Viewer);
+    }
+    if method == "POST" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/input") {
+        return Some(Role::Admin);
     }
     None
 }
