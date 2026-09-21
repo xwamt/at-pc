@@ -11,7 +11,7 @@ await_holding_lock = "deny"
 at-pc-protocol = { path = "crates/protocol" }
 at-pc-build-support = { path = "crates/build-support" }
 tokio = { version = "1.38", features = ["full"] }
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.7", features = ["macros", "ws"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"

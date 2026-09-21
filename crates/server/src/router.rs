@@ -63,6 +63,7 @@ pub struct McpRouter {
     active_terminal_id: Arc<RwLock<Option<String>>>,
     session_active_terminals: Arc<RwLock<HashMap<String, String>>>,
     desktop_frames: Arc<std::sync::RwLock<HashMap<String, DesktopFrameCache>>>,
+    desktop_frame_senders: Arc<std::sync::RwLock<HashMap<String, tokio::sync::broadcast::Sender<Arc<Vec<u8>>>>>>,
     audit_logger: Option<Arc<crate::audit::AuditLogger>>,
 }
 
@@ -75,6 +76,7 @@ impl McpRouter {
             active_terminal_id: Arc::new(RwLock::new(None)),
             session_active_terminals: Arc::new(RwLock::new(HashMap::new())),
             desktop_frames: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            desktop_frame_senders: Arc::new(std::sync::RwLock::new(HashMap::new())),
             audit_logger: None,
         }
     }
@@ -812,6 +814,19 @@ impl McpRouter {
         }
         Ok(())
     }
+
+    /// Subscribe to real-time binary desktop frames for a terminal
+    pub fn subscribe_desktop_frames(
+        &self,
+        terminal_id: &str,
+    ) -> tokio::sync::broadcast::Receiver<Arc<Vec<u8>>> {
+        let mut senders = self.desktop_frame_senders.write().unwrap();
+        let tx = senders.entry(terminal_id.to_string()).or_insert_with(|| {
+            let (tx, _rx) = tokio::sync::broadcast::channel(16);
+            tx
+        });
+        tx.subscribe()
+    }
 }
 
 impl AgentMessageHandler for McpRouter {
@@ -828,6 +843,14 @@ impl AgentMessageHandler for McpRouter {
         terminal_id: &str,
         frame: at_pc_protocol::messages::BinaryDesktopFrame,
     ) {
+        let encoded = Arc::new(frame.encode());
+        {
+            let senders = self.desktop_frame_senders.read().unwrap();
+            if let Some(tx) = senders.get(terminal_id) {
+                let _ = tx.send(encoded);
+            }
+        }
+
         let mut frames = self.desktop_frames.write().unwrap();
         if let Some(existing) = frames.get(terminal_id) {
             if frame.timestamp < existing.timestamp {

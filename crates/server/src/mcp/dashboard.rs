@@ -84,6 +84,11 @@ pub fn create_dashboard_router() -> Router<McpHttpState> {
         .route("/terminals/:id/desktop/raw", get(api_get_desktop_frame_raw))
         .route("/terminals/:id/desktop/input", post(api_send_desktop_input))
         .route(
+            "/terminals/:id/desktop/ticket",
+            post(api_issue_desktop_ticket),
+        )
+        .route("/terminals/:id/desktop/ws", get(api_desktop_ws_handler))
+        .route(
             "/terminals/:id/calls/:call_id/cancel",
             post(api_cancel_terminal_call),
         )
@@ -880,6 +885,167 @@ async fn api_send_desktop_input(
                 .into_response()
         }
     }
+}
+
+/// Handler for `POST /api/terminals/:id/desktop/ticket`
+async fn api_issue_desktop_ticket(
+    State(state): State<McpHttpState>,
+    Extension(role): Extension<Role>,
+    Path(terminal_id): Path<String>,
+) -> Response {
+    let terminals = state.router.list_terminals().await;
+    let term_exists = terminals.iter().any(|t| t.info.terminal_id == terminal_id);
+    if !term_exists {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Terminal '{terminal_id}' not found") })),
+        )
+            .into_response();
+    }
+
+    let ticket = state.ticket_store.issue(&terminal_id, role);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ticket": ticket,
+            "expires_in": 30,
+            "ws_path": format!("/api/terminals/{}/desktop/ws", terminal_id),
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct DesktopWsQuery {
+    ticket: Option<String>,
+}
+
+/// Handler for `GET /api/terminals/:id/desktop/ws`
+async fn api_desktop_ws_handler(
+    State(state): State<McpHttpState>,
+    Path(terminal_id): Path<String>,
+    Query(query): Query<DesktopWsQuery>,
+    ws: Result<
+        axum::extract::ws::WebSocketUpgrade,
+        axum::extract::ws::rejection::WebSocketUpgradeRejection,
+    >,
+) -> Response {
+    let ticket = match query.ticket {
+        Some(ref t) if !t.is_empty() => t.as_str(),
+        _ => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Missing desktop session ticket" })),
+            )
+                .into_response();
+        }
+    };
+
+    let role = match state.ticket_store.consume(ticket, &terminal_id) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": format!("Invalid or expired desktop ticket: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let ws = match ws {
+        Ok(ws) => ws,
+        Err(rejection) => return rejection.into_response(),
+    };
+
+    ws.on_upgrade(move |socket| handle_desktop_ws_session(socket, state, terminal_id, role))
+}
+
+async fn handle_desktop_ws_session(
+    socket: axum::extract::ws::WebSocket,
+    state: McpHttpState,
+    terminal_id: String,
+    role: Role,
+) {
+    use axum::extract::ws::Message;
+    use futures_util::{SinkExt, StreamExt};
+
+    tracing::info!(
+        "Desktop WebSocket session connected for terminal [{terminal_id}] with role [{role}]"
+    );
+
+    let mut frame_rx = state.router.subscribe_desktop_frames(&terminal_id);
+
+    // Ensure desktop stream is started on agent
+    let _ = state.router.start_desktop_stream(&terminal_id, 15, 60, 0, 1.0).await;
+
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    let term_id_send = terminal_id.clone();
+    let frame_push_task = tokio::spawn(async move {
+        loop {
+            match frame_rx.recv().await {
+                Ok(frame_bytes) => {
+                    if ws_sender
+                        .send(Message::Binary(frame_bytes.as_ref().clone()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::debug!(
+                        "Desktop WebSocket frame receiver lagged by {n} frames for [{term_id_send}]"
+                    );
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
+            }
+        }
+    });
+
+    let router = state.router.clone();
+    let term_id_recv = terminal_id.clone();
+    let input_task = tokio::spawn(async move {
+        while let Some(msg_res) = ws_receiver.next().await {
+            match msg_res {
+                Ok(Message::Text(text)) => {
+                    if role != Role::Admin {
+                        tracing::warn!(
+                            "Ignoring desktop input from non-admin role [{role}] on [{term_id_recv}]"
+                        );
+                        continue;
+                    }
+                    match serde_json::from_str::<at_pc_protocol::models::DesktopInputEvent>(&text) {
+                        Ok(event) => {
+                            if let Err(e) = router.send_desktop_input(&term_id_recv, event).await {
+                                tracing::warn!(
+                                    "Failed to dispatch desktop input on [{term_id_recv}]: {e}"
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!("Failed to parse desktop input JSON on [{term_id_recv}]: {err}");
+                        }
+                    }
+                }
+                Ok(Message::Close(_)) | Err(_) => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    tokio::select! {
+        _ = frame_push_task => {},
+        _ = input_task => {},
+    }
+
+    tracing::info!("Desktop WebSocket session disconnected for terminal [{terminal_id}]; stopping stream");
+    let _ = state.router.stop_desktop_stream(&terminal_id).await;
 }
 
 #[derive(Deserialize)]

@@ -84,6 +84,7 @@ async fn setup_test_context() -> TestContext {
         rate_limiter,
         session_store: Arc::new(at_pc_server::session::SessionStore::default()),
         quota_tracker: Arc::new(at_pc_server::rate_limit::KeyQuotaTracker::default()),
+        ticket_store: Arc::new(at_pc_server::DesktopTicketStore::default()),
     };
 
     let cors = tower_http::cors::CorsLayer::new()

@@ -408,6 +408,9 @@ pub fn handler_min_role(path: &str, method: &str) -> Option<Role> {
     if method == "POST" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/input") {
         return Some(Role::Admin);
     }
+    if method == "POST" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/ticket") {
+        return Some(Role::Viewer);
+    }
     None
 }
 

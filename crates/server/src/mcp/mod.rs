@@ -43,6 +43,8 @@ pub struct McpHttpState {
     pub session_store: Arc<crate::session::SessionStore>,
     /// Per-key request quota tracker.
     pub quota_tracker: Arc<crate::rate_limit::KeyQuotaTracker>,
+    /// Ephemeral ticket store for authenticating remote desktop WebSocket sessions.
+    pub ticket_store: Arc<crate::desktop_ticket::DesktopTicketStore>,
 }
 
 /// Returns the server log path used by both the tracing writer and dashboard tail endpoint.
@@ -153,6 +155,7 @@ pub fn create_mcp_http_router_with_keystore(
     let rate_limiter = Arc::new(AuthRateLimiter::default());
     let session_store = Arc::new(crate::session::SessionStore::default());
     let quota_tracker = Arc::new(crate::rate_limit::KeyQuotaTracker::default());
+    let ticket_store = Arc::new(crate::desktop_ticket::DesktopTicketStore::default());
 
     let state = McpHttpState {
         router,
@@ -163,6 +166,7 @@ pub fn create_mcp_http_router_with_keystore(
         rate_limiter,
         session_store,
         quota_tracker,
+        ticket_store,
     };
 
     create_mcp_http_router_with_state(state, cors)
@@ -202,6 +206,9 @@ fn is_auth_exempt(path: &str, method: &Method, peer_loopback: bool) -> bool {
         return true;
     }
     if path == "/health" && peer_loopback {
+        return true;
+    }
+    if path.ends_with("/desktop/ws") && *method == Method::GET {
         return true;
     }
     false
@@ -390,41 +397,33 @@ pub async fn auth_layer(
         }
     }
 
-    let path = req.uri().path();
-    let is_streaming_channel = path.contains("/desktop/");
-
-    let quota_opt = if !is_streaming_channel {
-        let key_id = principal_opt
-            .as_ref()
-            .map(|p| p.id.as_str())
-            .unwrap_or("legacy");
-        let quota = state.quota_tracker.check_and_record(key_id);
-        if !quota.allowed {
-            let mut response = (
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(json!({ "error": "Too Many Requests: Request quota exceeded" })),
-            )
-                .into_response();
-            let headers = response.headers_mut();
-            if let Ok(v) = quota.reset_secs.to_string().parse() {
-                headers.insert(axum::http::header::RETRY_AFTER, v);
-            }
-            if let Ok(v) = quota.limit.to_string().parse() {
-                headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
-            }
-            headers.insert(
-                axum::http::HeaderName::from_static("x-ratelimit-remaining"),
-                axum::http::HeaderValue::from_static("0"),
-            );
-            if let Ok(v) = quota.reset_secs.to_string().parse() {
-                headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
-            }
-            return response;
+    let key_id = principal_opt
+        .as_ref()
+        .map(|p| p.id.as_str())
+        .unwrap_or("legacy");
+    let quota = state.quota_tracker.check_and_record(key_id);
+    if !quota.allowed {
+        let mut response = (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "Too Many Requests: Request quota exceeded" })),
+        )
+            .into_response();
+        let headers = response.headers_mut();
+        if let Ok(v) = quota.reset_secs.to_string().parse() {
+            headers.insert(axum::http::header::RETRY_AFTER, v);
         }
-        Some(quota)
-    } else {
-        None
-    };
+        if let Ok(v) = quota.limit.to_string().parse() {
+            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
+        }
+        headers.insert(
+            axum::http::HeaderName::from_static("x-ratelimit-remaining"),
+            axum::http::HeaderValue::from_static("0"),
+        );
+        if let Ok(v) = quota.reset_secs.to_string().parse() {
+            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
+        }
+        return response;
+    }
 
     req.extensions_mut().insert(role);
     if let Some(t) = token_opt {
@@ -443,17 +442,15 @@ pub async fn auth_layer(
         );
     }
 
-    if let Some(quota) = quota_opt {
-        let headers = response.headers_mut();
-        if let Ok(v) = quota.limit.to_string().parse() {
-            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
-        }
-        if let Ok(v) = quota.remaining.to_string().parse() {
-            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-remaining"), v);
-        }
-        if let Ok(v) = quota.reset_secs.to_string().parse() {
-            headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
-        }
+    let headers = response.headers_mut();
+    if let Ok(v) = quota.limit.to_string().parse() {
+        headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
+    }
+    if let Ok(v) = quota.remaining.to_string().parse() {
+        headers.insert(axum::http::HeaderName::from_static("x-ratelimit-remaining"), v);
+    }
+    if let Ok(v) = quota.reset_secs.to_string().parse() {
+        headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
     }
 
     response

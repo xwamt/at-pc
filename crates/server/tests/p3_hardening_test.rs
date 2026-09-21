@@ -92,6 +92,7 @@ async fn setup_test_context(quota_limit: u32) -> TestContext {
         rate_limiter,
         session_store,
         quota_tracker,
+        ticket_store: Arc::new(at_pc_server::DesktopTicketStore::default()),
     };
 
     let cors = tower_http::cors::CorsLayer::new()
@@ -357,42 +358,29 @@ async fn test_g3_3_quota_and_ratelimit_headers() {
 }
 
 #[tokio::test]
-async fn test_desktop_streaming_bypasses_quota() {
-    // Setup context with strict limit of 3 requests per minute
-    let ctx = setup_test_context(3).await;
+async fn test_desktop_ticket_and_ws_auth() {
+    let ctx = setup_test_context(10).await;
     let peer: SocketAddr = "127.0.0.1:56789".parse().unwrap();
 
-    // 1. Send 10 rapid desktop frame streaming requests
-    for _ in 0..10 {
-        let mut req = Request::builder()
-            .method(Method::GET)
-            .uri("/api/terminals/dummy-term/desktop/frame.jpg")
-            .header(header::AUTHORIZATION, format!("Bearer {}", ctx.admin_key))
-            .body(Body::empty())
-            .unwrap();
-        req.extensions_mut().insert(ConnectInfo(peer));
-        let resp = ctx.app.clone().oneshot(req).await.unwrap();
-        // Returns 204 NO_CONTENT since dummy-term has no frames, but crucially NOT 429!
-        assert_ne!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        // Should not have ratelimit headers
-        assert!(!resp.headers().contains_key("x-ratelimit-remaining"));
-    }
-
-    // 2. Regular API requests should still have the full quota (3 remaining)
+    // 1. WebSocket endpoint without ticket query must be rejected (401)
     let mut req = Request::builder()
         .method(Method::GET)
-        .uri("/api/terminals")
-        .header(header::AUTHORIZATION, format!("Bearer {}", ctx.admin_key))
+        .uri("/api/terminals/dummy-term/desktop/ws")
         .body(Body::empty())
         .unwrap();
     req.extensions_mut().insert(ConnectInfo(peer));
     let resp = ctx.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        resp.headers().get("x-ratelimit-remaining").and_then(|v| v.to_str().ok()),
-        Some("2")
-    );
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 2. WebSocket endpoint with invalid ticket must be rejected (403)
+    let mut req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/terminals/dummy-term/desktop/ws?ticket=invalid_ticket")
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(peer));
+    let resp = ctx.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 // ---------------------------------------------------------------------------

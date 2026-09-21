@@ -78,6 +78,7 @@ export const restPaths = {
   desktopFrame: (id) => `/api/terminals/${encodeURIComponent(id)}/desktop/frame`,
   desktopFrameRaw: (id) => `/api/terminals/${encodeURIComponent(id)}/desktop/frame.jpg`,
   desktopInput: (id) => `/api/terminals/${encodeURIComponent(id)}/desktop/input`,
+  desktopTicket: (id) => `/api/terminals/${encodeURIComponent(id)}/desktop/ticket`,
   authMe: () => "/api/auth/me",
   login: () => "/api/auth/login",
   logout: () => "/api/auth/logout",

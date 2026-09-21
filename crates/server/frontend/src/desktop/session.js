@@ -31,6 +31,8 @@ export const desktopState = {
   globalMouseUpHandler: null,
   /** @type {(() => void) | null} */
   windowBlurHandler: null,
+  /** @type {WebSocket | null} */
+  ws: null,
 };
 
 export function setCursorMode(mode, btn) {
@@ -102,6 +104,15 @@ export function sendCanvasPointerMove(terminalId, canvas, event) {
 
 export function sendDesktopInput(terminalId, event) {
   if (!desktopState.currentStreamTid) return;
+
+  if (desktopState.ws && desktopState.ws.readyState === WebSocket.OPEN) {
+    try {
+      desktopState.ws.send(JSON.stringify(event));
+    } catch (err) {
+      console.warn("Failed to send input via WebSocket:", err);
+    }
+    return;
+  }
 
   if (event.action === "MouseMove" || event.action === "MouseMovePixel") {
     desktopState.pendingMouseMove = event;
@@ -507,87 +518,132 @@ export function setupRemoteDesktopInteractions(terminalId) {
   window.addEventListener("keydown", checkModifierCursor);
   window.addEventListener("keyup", checkModifierCursor);
 
-  let lastTimestamp = 0;
-  async function pollFrameLoop(tid) {
-    while (desktopState.currentStreamTid === tid) {
-      try {
-        const res = await authFetch(restPaths.desktopFrameRaw(tid));
-        if (res.status === 204) {
-          await new Promise((resolve) => setTimeout(resolve, 80));
-          continue;
-        }
-        if (res.ok) {
-          const tsHeader = res.headers.get("X-Frame-Timestamp");
-          const timestamp = tsHeader ? parseInt(tsHeader, 10) : 0;
-          if (!timestamp || timestamp !== lastTimestamp) {
-            if (timestamp) lastTimestamp = timestamp;
-            const blob = await res.blob();
-            const headerW = parseInt(res.headers.get("X-Frame-Width") || "0", 10);
-            const headerH = parseInt(res.headers.get("X-Frame-Height") || "0", 10);
-
-            if (typeof createImageBitmap === "function") {
-              const bitmap = await createImageBitmap(blob);
-              if (desktopState.currentStreamTid === tid) {
-                if (overlay) overlay.style.display = "none";
-                if (statusEl) statusEl.innerText = "实时推流中";
-                desktopState.rdActualW = headerW || bitmap.width;
-                desktopState.rdActualH = headerH || bitmap.height;
-                if (
-                  canvas.width !== desktopState.rdActualW ||
-                  canvas.height !== desktopState.rdActualH
-                ) {
-                  canvas.width = desktopState.rdActualW;
-                  canvas.height = desktopState.rdActualH;
-                  if (resEl) {
-                    resEl.innerText = `${desktopState.rdActualW} × ${desktopState.rdActualH}`;
-                  }
-                }
-                ctx.drawImage(bitmap, 0, 0);
-                desktopState.frameCount++;
-              }
-              bitmap.close?.();
-            } else {
-              await new Promise((resolve) => {
-                const url = URL.createObjectURL(blob);
-                const img = new Image();
-                img.onload = () => {
-                  URL.revokeObjectURL(url);
-                  if (desktopState.currentStreamTid !== tid) return resolve();
-                  if (overlay) overlay.style.display = "none";
-                  if (statusEl) statusEl.innerText = "实时推流中";
-                  desktopState.rdActualW = headerW || img.width;
-                  desktopState.rdActualH = headerH || img.height;
-                  if (
-                    canvas.width !== desktopState.rdActualW ||
-                    canvas.height !== desktopState.rdActualH
-                  ) {
-                    canvas.width = desktopState.rdActualW;
-                    canvas.height = desktopState.rdActualH;
-                    if (resEl) {
-                      resEl.innerText = `${desktopState.rdActualW} × ${desktopState.rdActualH}`;
-                    }
-                  }
-                  ctx.drawImage(img, 0, 0);
-                  desktopState.frameCount++;
-                  resolve();
-                };
-                img.onerror = () => {
-                  URL.revokeObjectURL(url);
-                  resolve();
-                };
-                img.src = url;
-              });
-            }
-          }
-        }
-      } catch {
-        /* transient poll errors are ignored */
+  async function connectDesktopWs(tid) {
+    try {
+      if (statusEl) statusEl.innerText = "申请安全票据...";
+      const ticketRes = await authFetch(restPaths.desktopTicket(tid), {
+        method: "POST",
+      });
+      if (!ticketRes.ok) {
+        throw new Error(`申请票据失败: HTTP ${ticketRes.status}`);
       }
-      await new Promise((resolve) => setTimeout(resolve, 35));
+      const data = await ticketRes.json();
+      const ticket = data.ticket;
+      if (!ticket) {
+        throw new Error("服务端未返回有效票据");
+      }
+
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${proto}//${location.host}/api/terminals/${encodeURIComponent(tid)}/desktop/ws?ticket=${encodeURIComponent(ticket)}`;
+
+      if (statusEl) statusEl.innerText = "正在建立双向安全信道...";
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
+      desktopState.ws = ws;
+
+      ws.onopen = () => {
+        if (desktopState.currentStreamTid === tid) {
+          if (statusEl) statusEl.innerText = "安全信道已连接";
+        }
+      };
+
+      ws.onmessage = async (event) => {
+        if (desktopState.currentStreamTid !== tid) return;
+        if (typeof event.data === "string") return;
+
+        const buffer = event.data;
+        if (buffer.byteLength < 24) return;
+
+        const dv = new DataView(buffer);
+        let frameW = 0;
+        let frameH = 0;
+        let jpegBytes = null;
+
+        if (
+          dv.getUint8(0) === 0x44 &&
+          dv.getUint8(1) === 0x46 &&
+          dv.getUint8(2) === 0x52 &&
+          dv.getUint8(3) === 0x4d
+        ) {
+          frameW = dv.getUint32(8, false);
+          frameH = dv.getUint32(12, false);
+          jpegBytes = new Uint8Array(buffer, 24);
+        } else {
+          jpegBytes = new Uint8Array(buffer);
+        }
+
+        if (!jpegBytes || jpegBytes.length === 0) return;
+
+        const blob = new Blob([jpegBytes], { type: "image/jpeg" });
+        if (typeof createImageBitmap === "function") {
+          try {
+            const bitmap = await createImageBitmap(blob);
+            if (desktopState.currentStreamTid === tid) {
+              if (overlay) overlay.style.display = "none";
+              if (statusEl) statusEl.innerText = "实时推流中";
+              desktopState.rdActualW = frameW || bitmap.width;
+              desktopState.rdActualH = frameH || bitmap.height;
+              if (
+                canvas.width !== desktopState.rdActualW ||
+                canvas.height !== desktopState.rdActualH
+              ) {
+                canvas.width = desktopState.rdActualW;
+                canvas.height = desktopState.rdActualH;
+                if (resEl) {
+                  resEl.innerText = `${desktopState.rdActualW} × ${desktopState.rdActualH}`;
+                }
+              }
+              ctx.drawImage(bitmap, 0, 0);
+              desktopState.frameCount++;
+            }
+            bitmap.close?.();
+          } catch (e) {
+            console.warn("createImageBitmap decode error:", e);
+          }
+        } else {
+          const url = URL.createObjectURL(blob);
+          const img = new Image();
+          img.onload = () => {
+            URL.revokeObjectURL(url);
+            if (desktopState.currentStreamTid !== tid) return;
+            if (overlay) overlay.style.display = "none";
+            if (statusEl) statusEl.innerText = "实时推流中";
+            desktopState.rdActualW = frameW || img.width;
+            desktopState.rdActualH = frameH || img.height;
+            if (
+              canvas.width !== desktopState.rdActualW ||
+              canvas.height !== desktopState.rdActualH
+            ) {
+              canvas.width = desktopState.rdActualW;
+              canvas.height = desktopState.rdActualH;
+              if (resEl) {
+                resEl.innerText = `${desktopState.rdActualW} × ${desktopState.rdActualH}`;
+              }
+            }
+            ctx.drawImage(img, 0, 0);
+            desktopState.frameCount++;
+          };
+          img.onerror = () => URL.revokeObjectURL(url);
+          img.src = url;
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.warn("Desktop WebSocket error:", err);
+      };
+
+      ws.onclose = () => {
+        if (desktopState.currentStreamTid === tid) {
+          if (statusEl) statusEl.innerText = "推流通道已关闭";
+        }
+      };
+    } catch (err) {
+      console.error("connectDesktopWs failed:", err);
+      if (statusEl) statusEl.innerText = `连接失败: ${err.message || err}`;
     }
   }
 
-  pollFrameLoop(terminalId);
+  connectDesktopWs(terminalId);
 
   desktopState.fpsTimer = setInterval(() => {
     const now = Date.now();
@@ -635,6 +691,15 @@ export async function stopAndCloseDesktop() {
   if (desktopState.windowBlurHandler) {
     window.removeEventListener("blur", desktopState.windowBlurHandler);
     desktopState.windowBlurHandler = null;
+  }
+
+  if (desktopState.ws) {
+    try {
+      desktopState.ws.close();
+    } catch {
+      /* ignore ws close error */
+    }
+    desktopState.ws = null;
   }
 
   if (document.fullscreenElement) {
