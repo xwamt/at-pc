@@ -538,7 +538,7 @@
       font-weight: 600;
     }
 
-    .cursor-tool-btn, .scale-tool-btn {
+    .scale-tool-btn {
       padding: 3px 8px;
       font-size: 11px;
       border-radius: 5px;
@@ -549,11 +549,11 @@
       transition: all 0.12s;
       white-space: nowrap;
     }
-    .cursor-tool-btn:hover, .scale-tool-btn:hover {
+    .scale-tool-btn:hover {
       background: rgba(51, 65, 85, 0.95);
       color: #fff;
     }
-    .cursor-tool-btn.active, .scale-tool-btn.active {
+    .scale-tool-btn.active {
       background: var(--primary);
       color: #0b0f19;
       font-weight: 700;

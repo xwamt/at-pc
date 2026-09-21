@@ -20,7 +20,6 @@ export const desktopState = {
   /** @type {ReturnType<typeof setTimeout> | null} */
   reconnectTimer: null,
   isSendingInput: false,
-  currentCursorMode: "default",
   currentScaleMode: "fit",
   currentStreamDisplayIndex: 0,
   /** @type {any[]} */
@@ -34,18 +33,6 @@ export const desktopState = {
   /** @type {WebSocket | null} */
   ws: null,
 };
-
-export function setCursorMode(mode, btn) {
-  desktopState.currentCursorMode = mode;
-  qsAll(".cursor-tool-btn").forEach((item) => {
-    item.classList.remove("active");
-  });
-  if (btn) btn.classList.add("active");
-  const canvas = byId("rdCanvas");
-  if (canvas) {
-    canvas.style.cursor = mode;
-  }
-}
 
 export function setScaleMode(mode, btn) {
   desktopState.currentScaleMode = mode;
@@ -68,23 +55,6 @@ export function setScaleMode(mode, btn) {
       canvas.style.width = "100%";
       canvas.style.height = "100%";
     }
-  }
-}
-
-export function checkModifierCursor(event) {
-  if (desktopState.currentCursorMode !== "default") return;
-  const canvas = byId("rdCanvas");
-  if (!canvas) return;
-  if (event.altKey && event.shiftKey) {
-    canvas.style.cursor = "nwse-resize";
-  } else if (event.altKey) {
-    canvas.style.cursor = "ew-resize";
-  } else if (event.shiftKey) {
-    canvas.style.cursor = "ns-resize";
-  } else if (event.ctrlKey) {
-    canvas.style.cursor = "move";
-  } else {
-    canvas.style.cursor = "default";
   }
 }
 
@@ -252,7 +222,6 @@ export async function openRemoteDesktop(terminalId) {
   desktopState.lastActiveTime = Date.now();
   desktopState.isIdleStandby = false;
   desktopState.isSendingInput = false;
-  desktopState.currentCursorMode = "default";
   desktopState.currentScaleMode = "fit";
   desktopState.isLocalMouseDown = false;
 
@@ -268,15 +237,6 @@ export async function openRemoteDesktop(terminalId) {
             <div class="rd-hud-section" id="rdMonitorsSection" style="display: none;">
               <span style="color: var(--text-dim); font-size: 11px;">显示器:</span>
               <div id="rdMonitorButtons" style="display: flex; gap: 4px;"></div>
-            </div>
-
-            <div class="rd-hud-section">
-              <span style="color: var(--text-dim); font-size: 11px;">鼠标手势:</span>
-              <button class="cursor-tool-btn active" data-cursor="default" onclick="setCursorMode('default', this)" title="普通鼠标箭头（可随时按住 Alt 键触发拉宽）">↖ 默认</button>
-              <button class="cursor-tool-btn" data-cursor="ew-resize" onclick="setCursorMode('ew-resize', this)" title="水平拉宽模式（拖动窗口左右边框调整宽度）">↔ 水平拉宽</button>
-              <button class="cursor-tool-btn" data-cursor="ns-resize" onclick="setCursorMode('ns-resize', this)" title="垂直拉长模式（拖动窗口上下边框）">↕ 垂直拉长</button>
-              <button class="cursor-tool-btn" data-cursor="nwse-resize" onclick="setCursorMode('nwse-resize', this)" title="对角缩放模式（拖动窗口四角）">⤡ 对角缩放</button>
-              <button class="cursor-tool-btn" data-cursor="text" onclick="setCursorMode('text', this)" title="文本选择工字光标">ꕯ 文本</button>
             </div>
 
             <div class="rd-hud-section">
@@ -310,7 +270,7 @@ export async function openRemoteDesktop(terminalId) {
           </div>
 
           <div class="rd-bottom-bar" style="margin-top: 8px; font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center;">
-            <span>💡 <b>交互指引</b>: 点击画面捕获鼠标焦点。已升级为标准鼠标箭头，<b>按住 Alt 键移动可临时触发 [↔ 水平拉宽] 手势</b>；若按键粘连可点击顶部 [🔓 释放按键]。</span>
+            <span>💡 <b>交互指引</b>: 点击画面捕获鼠标焦点；若按键粘连可点击顶部 [🔓 释放按键]。</span>
             <span style="color: var(--primary); font-family: monospace;">纯 Rust 原生抓帧 · 智能自适应全屏</span>
           </div>
         </div>
@@ -389,7 +349,6 @@ export function setupRemoteDesktopInteractions(terminalId) {
 
   let lastMoveTime = 0;
   canvas.addEventListener("mousemove", (event) => {
-    checkModifierCursor(event);
     const now = Date.now();
     if (now - lastMoveTime < 35) return;
     lastMoveTime = now;
@@ -398,7 +357,6 @@ export function setupRemoteDesktopInteractions(terminalId) {
 
   canvas.addEventListener("mousedown", (event) => {
     canvas.focus();
-    checkModifierCursor(event);
     desktopState.isLocalMouseDown = true;
     desktopState.localPressedButton = event.button;
     sendCanvasPointerMove(terminalId, canvas, event);
@@ -411,7 +369,6 @@ export function setupRemoteDesktopInteractions(terminalId) {
   desktopState.globalMouseUpHandler = (event) => {
     if (!desktopState.isLocalMouseDown) return;
     desktopState.isLocalMouseDown = false;
-    checkModifierCursor(event);
     sendCanvasPointerMove(terminalId, canvas, event);
     sendDesktopInput(terminalId, {
       action: "MouseUp",
@@ -442,7 +399,6 @@ export function setupRemoteDesktopInteractions(terminalId) {
 
   canvas.addEventListener("keydown", (event) => {
     event.preventDefault();
-    checkModifierCursor(event);
     sendDesktopInput(terminalId, {
       action: "KeyDown",
       data: { key_code: event.keyCode, key: event.key },
@@ -451,15 +407,11 @@ export function setupRemoteDesktopInteractions(terminalId) {
 
   canvas.addEventListener("keyup", (event) => {
     event.preventDefault();
-    checkModifierCursor(event);
     sendDesktopInput(terminalId, {
       action: "KeyUp",
       data: { key_code: event.keyCode, key: event.key },
     });
   });
-
-  window.addEventListener("keydown", checkModifierCursor);
-  window.addEventListener("keyup", checkModifierCursor);
 
   async function connectDesktopWs(tid) {
     try {
@@ -656,8 +608,6 @@ export async function stopAndCloseDesktop() {
     clearInterval(desktopState.fpsTimer);
     desktopState.fpsTimer = null;
   }
-  window.removeEventListener("keydown", checkModifierCursor);
-  window.removeEventListener("keyup", checkModifierCursor);
   if (desktopState.globalMouseUpHandler) {
     window.removeEventListener("mouseup", desktopState.globalMouseUpHandler);
     desktopState.globalMouseUpHandler = null;

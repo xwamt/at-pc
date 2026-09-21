@@ -141,7 +141,14 @@ async fn dashboard_html_handler() -> impl IntoResponse {
         .into_owned();
     #[cfg(not(debug_assertions))]
     let html = DASHBOARD_HTML.to_string();
-    Html(html)
+    (
+        [
+            (axum::http::header::CACHE_CONTROL, "no-cache, no-store, must-revalidate, max-age=0"),
+            (axum::http::header::PRAGMA, "no-cache"),
+            (axum::http::header::EXPIRES, "0"),
+        ],
+        Html(html),
+    )
 }
 
 fn is_safe_asset_path(path: &str) -> bool {
