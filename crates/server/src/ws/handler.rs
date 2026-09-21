@@ -192,20 +192,16 @@ pub async fn handle_stream_with_peer<S: AsyncRead + AsyncWrite + Unpin + Send + 
                 // Priority 1: Application messages from server to terminal
                 Some(msg) = initial_sender_rx.recv() => {
                     let mut final_msg = msg;
-                    if matches!(
-                        final_msg,
+                    let is_coalesceable_mouse = |m: &ServerToAgentMessage| matches!(
+                        m,
                         ServerToAgentMessage::DesktopInput {
                             event: at_pc_protocol::models::DesktopInputEvent::MouseMove { .. }
+                                | at_pc_protocol::models::DesktopInputEvent::MouseMovePixel { .. }
                         }
-                    ) {
+                    );
+                    if is_coalesceable_mouse(&final_msg) {
                         while let Ok(next) = initial_sender_rx.try_recv() {
-                            let is_mouse_move = matches!(
-                                next,
-                                ServerToAgentMessage::DesktopInput {
-                                    event: at_pc_protocol::models::DesktopInputEvent::MouseMove { .. }
-                                }
-                            );
-                            if is_mouse_move {
+                            if is_coalesceable_mouse(&next) {
                                 final_msg = next;
                             } else {
                                 if let Ok(json) = serde_json::to_string(&final_msg) {

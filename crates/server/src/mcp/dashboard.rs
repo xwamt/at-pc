@@ -915,9 +915,13 @@ async fn api_issue_desktop_ticket(
         .into_response()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct DesktopWsQuery {
     ticket: Option<String>,
+    fps: Option<u32>,
+    quality: Option<u8>,
+    scale: Option<f32>,
+    display_index: Option<u32>,
 }
 
 /// Handler for `GET /api/terminals/:id/desktop/ws`
@@ -957,7 +961,8 @@ async fn api_desktop_ws_handler(
         Err(rejection) => return rejection.into_response(),
     };
 
-    ws.on_upgrade(move |socket| handle_desktop_ws_session(socket, state, terminal_id, role))
+    let query_params = query.clone();
+    ws.on_upgrade(move |socket| handle_desktop_ws_session(socket, state, terminal_id, role, query_params))
 }
 
 async fn handle_desktop_ws_session(
@@ -965,6 +970,7 @@ async fn handle_desktop_ws_session(
     state: McpHttpState,
     terminal_id: String,
     role: Role,
+    query: DesktopWsQuery,
 ) {
     use axum::extract::ws::Message;
     use futures_util::{SinkExt, StreamExt};
@@ -975,8 +981,15 @@ async fn handle_desktop_ws_session(
 
     let mut frame_rx = state.router.subscribe_desktop_frames(&terminal_id);
 
-    // Ensure desktop stream is started on agent
-    let _ = state.router.start_desktop_stream(&terminal_id, 15, 60, 0, 1.0).await;
+    // Ensure desktop stream is started on agent with client negotiated parameters
+    let fps = query.fps.unwrap_or(15);
+    let quality = query.quality.unwrap_or(60);
+    let display_index = query.display_index.unwrap_or(0);
+    let scale = query.scale.unwrap_or(1.0);
+    let _ = state
+        .router
+        .start_desktop_stream(&terminal_id, fps, quality, display_index, scale)
+        .await;
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
@@ -1044,8 +1057,17 @@ async fn handle_desktop_ws_session(
         _ = input_task => {},
     }
 
-    tracing::info!("Desktop WebSocket session disconnected for terminal [{terminal_id}]; stopping stream");
-    let _ = state.router.stop_desktop_stream(&terminal_id).await;
+    let remaining_subscribers = state.router.get_desktop_stream_subscribers(&terminal_id);
+    if remaining_subscribers == 0 {
+        tracing::info!(
+            "Desktop WebSocket session disconnected for terminal [{terminal_id}]; no more viewers, stopping stream"
+        );
+        let _ = state.router.stop_desktop_stream(&terminal_id).await;
+    } else {
+        tracing::info!(
+            "Desktop WebSocket session disconnected for terminal [{terminal_id}]; {remaining_subscribers} viewers remaining"
+        );
+    }
 }
 
 #[derive(Deserialize)]

@@ -755,8 +755,11 @@ impl McpRouter {
 
     /// Retrieve the most recently cached desktop frame for a terminal
     pub async fn get_latest_desktop_frame(&self, terminal_id: &str) -> Option<DesktopFrameCache> {
-        let frames = self.desktop_frames.read().unwrap();
-        frames.get(terminal_id).cloned()
+        let mut frame = self.desktop_frames.read().unwrap().get(terminal_id).cloned()?;
+        if frame.data.is_empty() && !frame.raw_bytes.is_empty() {
+            frame.data = base64::prelude::BASE64_STANDARD.encode(&frame.raw_bytes);
+        }
+        Some(frame)
     }
 
     /// Retrieve the raw JPEG bytes of the latest desktop frame for a terminal
@@ -797,8 +800,21 @@ impl McpRouter {
     /// Instruct an agent terminal to stop streaming its desktop frames
     pub async fn stop_desktop_stream(&self, terminal_id: &str) -> Result<(), String> {
         self.desktop_frames.write().unwrap().remove(terminal_id);
+        {
+            let mut senders = self.desktop_frame_senders.write().unwrap();
+            senders.remove(terminal_id);
+        }
         let msg = ServerToAgentMessage::StopDesktopStream;
         self.registry.send_to_terminal(terminal_id, msg).await
+    }
+
+    /// Returns the number of active WebSocket subscribers listening to desktop frames for a terminal
+    pub fn get_desktop_stream_subscribers(&self, terminal_id: &str) -> usize {
+        let senders = self.desktop_frame_senders.read().unwrap();
+        senders
+            .get(terminal_id)
+            .map(|tx| tx.receiver_count())
+            .unwrap_or(0)
     }
 
     /// Send a simulated remote mouse/keyboard input event to an agent terminal
@@ -843,8 +859,15 @@ impl AgentMessageHandler for McpRouter {
         terminal_id: &str,
         frame: at_pc_protocol::messages::BinaryDesktopFrame,
     ) {
-        let encoded = Arc::new(frame.encode());
-        {
+        let has_subscribers = {
+            let senders = self.desktop_frame_senders.read().unwrap();
+            senders
+                .get(terminal_id)
+                .map(|tx| tx.receiver_count() > 0)
+                .unwrap_or(false)
+        };
+        if has_subscribers {
+            let encoded = Arc::new(frame.encode());
             let senders = self.desktop_frame_senders.read().unwrap();
             if let Some(tx) = senders.get(terminal_id) {
                 let _ = tx.send(encoded);
@@ -868,7 +891,6 @@ impl AgentMessageHandler for McpRouter {
             }
             return;
         }
-        let data = base64::prelude::BASE64_STANDARD.encode(&frame.data);
         frames.insert(
             terminal_id.to_string(),
             DesktopFrameCache {
@@ -876,7 +898,7 @@ impl AgentMessageHandler for McpRouter {
                 width: frame.width,
                 height: frame.height,
                 format: "jpeg".to_string(),
-                data,
+                data: String::new(),
                 raw_bytes: frame.data,
                 timestamp: frame.timestamp,
             },

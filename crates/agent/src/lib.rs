@@ -2,6 +2,7 @@
 //! Provides AgentConfig, AgentExecutor, AgentWsClient, diagnostic tools, and WebSocket client engine.
 
 pub mod app;
+pub mod capture;
 pub mod config;
 pub mod executor;
 pub mod input;

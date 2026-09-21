@@ -509,9 +509,33 @@ impl AgentWsClient {
             *tx_guard = Some(outbound_tx.clone());
         }
 
-        // 4. Spawn WebSocket Writer Task with Biased Priority Scheduling
+        // 4. Spawn WebSocket Writer Task with Fair Priority Scheduling
         let write_task = tokio::spawn(async move {
+            let mut control_burst: u8 = 0;
             loop {
+                // Priority 0: Send Pong immediately if available
+                if let Ok(pong_payload) = pong_rx.try_recv() {
+                    let ws_msg = tokio_tungstenite::tungstenite::Message::Pong(pong_payload);
+                    if let Err(e) = ws_sink.send(ws_msg).await {
+                        warn!("Failed to write pong WS message: {}", e);
+                        break;
+                    }
+                    continue;
+                }
+
+                // Fair scheduling: after 2 consecutive control messages, give binary video frames an opportunity
+                if control_burst >= 2 {
+                    if let Ok(frame_bytes) = binary_rx.try_recv() {
+                        control_burst = 0;
+                        let ws_msg = tokio_tungstenite::tungstenite::Message::Binary(frame_bytes);
+                        if let Err(e) = ws_sink.send(ws_msg).await {
+                            warn!("Failed to write binary desktop frame: {}", e);
+                            break;
+                        }
+                        continue;
+                    }
+                }
+
                 tokio::select! {
                     biased;
 
@@ -526,6 +550,7 @@ impl AgentWsClient {
 
                     // Priority 1: Control & tool execution messages
                     Some(msg) = outbound_rx.recv() => {
+                        control_burst = control_burst.saturating_add(1);
                         match serde_json::to_string(&msg) {
                             Ok(json) => {
                                 let ws_msg = tokio_tungstenite::tungstenite::Message::Text(json);
@@ -542,6 +567,7 @@ impl AgentWsClient {
 
                     // Priority 2: Binary remote desktop frames
                     Some(frame_bytes) = binary_rx.recv() => {
+                        control_burst = 0;
                         let ws_msg = tokio_tungstenite::tungstenite::Message::Binary(frame_bytes);
                         if let Err(e) = ws_sink.send(ws_msg).await {
                             warn!("Failed to write binary desktop frame: {}", e);
@@ -760,6 +786,7 @@ impl AgentWsClient {
                 self.stream_controller.stop();
             }
             ServerToAgentMessage::DesktopInput { event } => {
+                self.stream_controller.notify_interaction();
                 if let Err(e) = self.input_tx.send(event) {
                     tracing::warn!("Failed to queue remote desktop input event: {}", e);
                 }

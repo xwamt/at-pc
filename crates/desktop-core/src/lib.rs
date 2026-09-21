@@ -161,6 +161,18 @@ pub fn is_frame_dirty(previous: &[u64], current: &[u64]) -> bool {
     dirty_block_ratio(previous, current) >= DIRTY_BLOCK_RATIO_THRESHOLD
 }
 
+/// True when enough tiles changed to justify a full re-encode, with interaction sensitivity.
+/// When `is_interacting` is true, any changed block (ratio > 0.0) is treated as dirty to ensure
+/// immediate visual feedback for mouse movements, hover highlights, and typing.
+pub fn is_frame_dirty_interactive(previous: &[u64], current: &[u64], is_interacting: bool) -> bool {
+    let ratio = dirty_block_ratio(previous, current);
+    if is_interacting {
+        ratio > 0.0
+    } else {
+        ratio >= DIRTY_BLOCK_RATIO_THRESHOLD
+    }
+}
+
 /// Computes the legacy sampling hash used by the desktop stream's dirty-frame check.
 #[deprecated(note = "Replaced by word-wise compute_block_hashes for tile-based dirty checking")]
 pub fn compute_sample_hash(raw_rgba: &[u8]) -> u64 {
@@ -226,6 +238,15 @@ pub fn encode_jpeg(rgb: &RgbImage, quality: u8) -> image::ImageResult<Vec<u8>> {
     let mut cursor = Cursor::new(&mut jpeg_bytes);
     let encoder = JpegEncoder::new_with_quality(&mut cursor, quality);
     rgb.write_with_encoder(encoder)?;
+    Ok(jpeg_bytes)
+}
+
+/// Encodes raw RGB bytes (width * height * 3) directly to JPEG.
+pub fn encode_jpeg_from_raw(rgb_bytes: &[u8], width: u32, height: u32, quality: u8) -> image::ImageResult<Vec<u8>> {
+    let mut jpeg_bytes = Vec::with_capacity((width * height / 5) as usize);
+    let mut cursor = Cursor::new(&mut jpeg_bytes);
+    let mut encoder = JpegEncoder::new_with_quality(&mut cursor, quality);
+    encoder.encode(rgb_bytes, width, height, image::ExtendedColorType::Rgb8)?;
     Ok(jpeg_bytes)
 }
 
@@ -419,6 +440,16 @@ mod tests {
             "cursor flicker ratio {ratio} should not force a full re-encode"
         );
         assert!(!is_frame_dirty(&baseline, &changed));
+    }
+
+    #[test]
+    fn cursor_sized_change_triggers_reencode_when_interactive() {
+        let (mut raw, w, h) = solid_rgba(1920, 1080, [10, 20, 30, 255]);
+        let baseline = compute_block_hashes(&raw, w, h);
+        paint_rect(&mut raw, w, 960, 540, 32, 32, [255, 0, 0, 255]);
+        let changed = compute_block_hashes(&raw, w, h);
+        assert!(!is_frame_dirty_interactive(&baseline, &changed, false));
+        assert!(is_frame_dirty_interactive(&baseline, &changed, true));
     }
 
     #[test]

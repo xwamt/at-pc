@@ -3,9 +3,11 @@
 //! and channel isolation to avoid saturating control and heartbeat channels.
 
 use at_pc_desktop_core::{
-    compute_block_hashes, decide_frame_send, encode_jpeg, fast_rgba_to_rgb_scaled, is_frame_dirty,
-    FrameSendDecision, STREAM_KEEPALIVE_INTERVAL,
+    compute_block_hashes, decide_frame_send, encode_jpeg, fast_rgba_to_rgb_scaled,
+    is_frame_dirty_interactive, FrameSendDecision, STREAM_KEEPALIVE_INTERVAL,
 };
+#[cfg(windows)]
+use at_pc_desktop_core::{encode_jpeg_from_raw, stream_output_size};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -47,6 +49,26 @@ unsafe impl Send for SendMonitor {}
 impl SendMonitor {
     fn capture_image(&self) -> Result<xcap::image::RgbaImage, xcap::XCapError> {
         self.0.capture_image()
+    }
+
+    #[cfg(windows)]
+    fn x(&self) -> i32 {
+        self.0.x().unwrap_or(0)
+    }
+
+    #[cfg(windows)]
+    fn y(&self) -> i32 {
+        self.0.y().unwrap_or(0)
+    }
+
+    #[cfg(windows)]
+    fn width(&self) -> u32 {
+        self.0.width().unwrap_or(0)
+    }
+
+    #[cfg(windows)]
+    fn height(&self) -> u32 {
+        self.0.height().unwrap_or(0)
     }
 }
 
@@ -217,10 +239,18 @@ fn find_monitor(display_index: u32) -> Option<Monitor> {
 }
 
 /// Controller managing the background desktop streaming task
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct DesktopStreamController {
     is_streaming: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
+    interaction_notify: Arc<tokio::sync::Notify>,
+    last_interaction_ms: Arc<AtomicU64>,
+}
+
+impl Default for DesktopStreamController {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DesktopStreamController {
@@ -228,7 +258,17 @@ impl DesktopStreamController {
         Self {
             is_streaming: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
+            interaction_notify: Arc::new(tokio::sync::Notify::new()),
+            last_interaction_ms: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Notifies the stream controller that a user interaction event arrived.
+    /// This immediately wakes up any idle sleep backoff and enters the active interaction window.
+    pub fn notify_interaction(&self) {
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        self.last_interaction_ms.store(now_ms, Ordering::SeqCst);
+        self.interaction_notify.notify_one();
     }
 
     /// Returns whether desktop streaming is currently active
@@ -258,6 +298,8 @@ impl DesktopStreamController {
 
         let is_running = self.is_streaming.clone();
         let gen_ref = self.generation.clone();
+        let notify = self.interaction_notify.clone();
+        let last_interaction_ms = self.last_interaction_ms.clone();
         let target_fps = if fps == 0 { 15 } else { fps.min(30) };
         let frame_interval = Duration::from_millis((1000 / target_fps) as u64);
         let jpeg_quality = if quality == 0 { 55 } else { quality.min(85) };
@@ -268,6 +310,9 @@ impl DesktopStreamController {
         );
 
         tokio::spawn(async move {
+            #[cfg(windows)]
+            let gdi_capturer = Arc::new(std::sync::Mutex::new(crate::capture::windows::GdiScreenCapturer::new().ok()));
+
             let mut cached_monitor = find_monitor(display_index).map(SendMonitor);
             let mut state = StreamSendState {
                 last_hashes: Vec::new(),
@@ -291,9 +336,65 @@ impl DesktopStreamController {
 
                 let prev_hashes = state.last_hashes.clone();
                 let elapsed_since_send = state.last_sent_time.elapsed();
+                let last_interaction_epoch = last_interaction_ms.load(Ordering::SeqCst);
+                let now_epoch = chrono::Utc::now().timestamp_millis() as u64;
+                let is_interacting = now_epoch.saturating_sub(last_interaction_epoch) < 600;
+
+                #[cfg(windows)]
+                let gdi_capturer_ref = gdi_capturer.clone();
 
                 // 2-5. Capture + hash + convert + encode on a short blocking task (not the whole session)
                 let prepared = tokio::task::spawn_blocking(move || {
+                    #[cfg(windows)]
+                    {
+                        if let Ok(mut capturer_guard) = gdi_capturer_ref.lock() {
+                            if capturer_guard.is_none() {
+                                *capturer_guard = crate::capture::windows::GdiScreenCapturer::new().ok();
+                            }
+                            if let Some(capturer) = capturer_guard.as_mut() {
+                                let mon_x = send_monitor.x();
+                                let mon_y = send_monitor.y();
+                                let mon_w = send_monitor.width();
+                                let mon_h = send_monitor.height();
+                                let (target_w, target_h) = stream_output_size(mon_w, mon_h, scale);
+
+                                if target_w > 0 && target_h > 0 && mon_w > 0 && mon_h > 0 {
+                                    match capturer.capture_scaled(mon_x, mon_y, mon_w, mon_h, target_w, target_h) {
+                                        Ok((rgba_buf, rgb_buf)) => {
+                                            let hashes = compute_block_hashes(rgba_buf, target_w, target_h);
+                                            match decide_frame_send(
+                                                is_frame_dirty_interactive(&prev_hashes, &hashes, is_interacting),
+                                                elapsed_since_send,
+                                                STREAM_KEEPALIVE_INTERVAL,
+                                            ) {
+                                                FrameSendDecision::Skip => return PreparedFrame::Unchanged,
+                                                FrameSendDecision::Keepalive => return PreparedFrame::Keepalive,
+                                                FrameSendDecision::Encode => {
+                                                    return match encode_jpeg_from_raw(rgb_buf, target_w, target_h, jpeg_quality) {
+                                                        Ok(jpeg_bytes) => PreparedFrame::Ready {
+                                                            hashes,
+                                                            width: target_w,
+                                                            height: target_h,
+                                                            jpeg_bytes,
+                                                        },
+                                                        Err(e) => PreparedFrame::EncodeError {
+                                                            hashes,
+                                                            error: e.to_string(),
+                                                        },
+                                                    };
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            debug!("GDI capture failed: {}, recreating capturer and falling back to xcap", e);
+                                            *capturer_guard = None;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     let image = match send_monitor.capture_image() {
                         Ok(img) => img,
                         Err(e) => return PreparedFrame::CaptureError(e.to_string()),
@@ -301,7 +402,7 @@ impl DesktopStreamController {
                     let hashes =
                         compute_block_hashes(image.as_raw(), image.width(), image.height());
                     match decide_frame_send(
-                        is_frame_dirty(&prev_hashes, &hashes),
+                        is_frame_dirty_interactive(&prev_hashes, &hashes, is_interacting),
                         elapsed_since_send,
                         STREAM_KEEPALIVE_INTERVAL,
                     ) {
@@ -361,9 +462,15 @@ impl DesktopStreamController {
                     PreparedFrame::Unchanged => {
                         let elapsed = start_time.elapsed();
                         if elapsed < current_interval {
-                            tokio::time::sleep(current_interval - elapsed).await;
+                            let remaining = current_interval - elapsed;
+                            tokio::select! {
+                                _ = tokio::time::sleep(remaining) => {},
+                                _ = notify.notified() => {
+                                    consecutive_unchanged = 0;
+                                }
+                            }
                         } else {
-                            tokio::time::sleep(Duration::from_millis(10)).await;
+                            tokio::task::yield_now().await;
                         }
                         continue;
                     }
@@ -414,9 +521,15 @@ impl DesktopStreamController {
                 // 7. Yield properly to ensure low CPU usage (<5%)
                 let elapsed = start_time.elapsed();
                 if elapsed < current_interval {
-                    tokio::time::sleep(current_interval - elapsed).await;
+                    let remaining = current_interval - elapsed;
+                    tokio::select! {
+                        _ = tokio::time::sleep(remaining) => {},
+                        _ = notify.notified() => {
+                            consecutive_unchanged = 0;
+                        }
+                    }
                 } else {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    tokio::task::yield_now().await;
                 }
             }
             debug!(

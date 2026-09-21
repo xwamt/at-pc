@@ -12,19 +12,19 @@ export const desktopState = {
   rdActualW: 1920,
   rdActualH: 1080,
   lastFrameTime: Date.now(),
+  lastActiveTime: Date.now(),
+  isIdleStandby: false,
   frameCount: 0,
   /** @type {ReturnType<typeof setInterval> | null} */
   fpsTimer: null,
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  reconnectTimer: null,
   isSendingInput: false,
-  /** @type {any} */
-  pendingMouseMove: null,
   currentCursorMode: "default",
   currentScaleMode: "fit",
   currentStreamDisplayIndex: 0,
   /** @type {any[]} */
   activeMonitorsList: [],
-  isFlushingMove: false,
-  inputQueue: Promise.resolve(),
   isLocalMouseDown: false,
   localPressedButton: 0,
   /** @type {((event: MouseEvent) => void) | null} */
@@ -114,63 +114,14 @@ export function sendDesktopInput(terminalId, event) {
     return;
   }
 
-  if (event.action === "MouseMove" || event.action === "MouseMovePixel") {
-    desktopState.pendingMouseMove = event;
-    flushMouseMove(terminalId);
-    return;
-  }
-
-  desktopState.inputQueue = desktopState.inputQueue.then(async () => {
-    if (desktopState.pendingMouseMove) {
-      const moveEvt = desktopState.pendingMouseMove;
-      desktopState.pendingMouseMove = null;
-      try {
-        await authFetch(restPaths.desktopInput(terminalId), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(moveEvt),
-        });
-      } catch {
-        /* ignore move flush errors */
-      }
-    }
-    try {
-      await authFetch(restPaths.desktopInput(terminalId), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(event),
-      });
-    } catch (err) {
-      console.warn("Failed to send input event:", err);
-    }
-  });
-}
-
-export function flushMouseMove(terminalId) {
-  if (
-    desktopState.isFlushingMove ||
-    !desktopState.pendingMouseMove ||
-    !desktopState.currentStreamTid
-  ) {
-    return;
-  }
-
-  desktopState.isFlushingMove = true;
-  const event = desktopState.pendingMouseMove;
-  desktopState.pendingMouseMove = null;
-
+  // Fallback REST call for when WS is still connecting
   authFetch(restPaths.desktopInput(terminalId), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(event),
-  })
-    .catch((err) => console.warn("MouseMove send error:", err))
-    .finally(() => {
-      desktopState.isFlushingMove = false;
-      if (desktopState.pendingMouseMove && desktopState.currentStreamTid) {
-        setTimeout(() => flushMouseMove(terminalId), 20);
-      }
-    });
+  }).catch((err) => {
+    console.warn("Failed to send input event via fallback REST:", err);
+  });
 }
 
 export function releaseAllInputs(terminalId) {
@@ -292,12 +243,12 @@ export async function openRemoteDesktop(terminalId) {
   desktopState.activeMonitorsList = [];
   desktopState.frameCount = 0;
   desktopState.lastFrameTime = Date.now();
-  desktopState.pendingMouseMove = null;
+  desktopState.lastActiveTime = Date.now();
+  desktopState.isIdleStandby = false;
   desktopState.isSendingInput = false;
   desktopState.currentCursorMode = "default";
   desktopState.currentScaleMode = "fit";
   desktopState.isLocalMouseDown = false;
-  desktopState.inputQueue = Promise.resolve();
 
   const html = `
         <div id="rdMainWrapper" class="rd-main-wrapper">
@@ -533,8 +484,16 @@ export function setupRemoteDesktopInteractions(terminalId) {
         throw new Error("服务端未返回有效票据");
       }
 
+      const dpr = window.devicePixelRatio || 1;
+      const boxW = wrapper ? wrapper.clientWidth : 1280;
+      const physicalW = Math.round(boxW * dpr);
+      let scale = 1.0;
+      if (physicalW > 0) {
+        scale = Math.min(2.0, Math.max(0.5, Math.round((physicalW / 1280) * 10) / 10));
+      }
+
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${proto}//${location.host}/api/terminals/${encodeURIComponent(tid)}/desktop/ws?ticket=${encodeURIComponent(ticket)}`;
+      const wsUrl = `${proto}//${location.host}/api/terminals/${encodeURIComponent(tid)}/desktop/ws?ticket=${encodeURIComponent(ticket)}&scale=${scale}&fps=15&quality=60`;
 
       if (statusEl) statusEl.innerText = "正在建立双向安全信道...";
       const ws = new WebSocket(wsUrl);
@@ -572,7 +531,13 @@ export function setupRemoteDesktopInteractions(terminalId) {
           jpegBytes = new Uint8Array(buffer);
         }
 
-        if (!jpegBytes || jpegBytes.length === 0) return;
+        if (!jpegBytes || jpegBytes.length === 0) {
+          desktopState.lastActiveTime = Date.now();
+          desktopState.isIdleStandby = true;
+          return;
+        }
+        desktopState.isIdleStandby = false;
+        desktopState.lastActiveTime = Date.now();
 
         const blob = new Blob([jpegBytes], { type: "image/jpeg" });
         if (typeof createImageBitmap === "function") {
@@ -634,7 +599,15 @@ export function setupRemoteDesktopInteractions(terminalId) {
 
       ws.onclose = () => {
         if (desktopState.currentStreamTid === tid) {
-          if (statusEl) statusEl.innerText = "推流通道已关闭";
+          if (statusEl) statusEl.innerText = "推流通道已断开，正在尝试重连...";
+          if (!desktopState.reconnectTimer) {
+            desktopState.reconnectTimer = setTimeout(() => {
+              desktopState.reconnectTimer = null;
+              if (desktopState.currentStreamTid === tid) {
+                connectDesktopWs(tid);
+              }
+            }, 1500);
+          }
         }
       };
     } catch (err) {
@@ -650,7 +623,15 @@ export function setupRemoteDesktopInteractions(terminalId) {
     const elapsed = (now - desktopState.lastFrameTime) / 1000;
     if (elapsed > 0) {
       const currentFps = Math.round(desktopState.frameCount / elapsed);
-      if (fpsEl) fpsEl.innerText = `${currentFps} FPS`;
+      if (fpsEl) {
+        if (desktopState.frameCount > 0) {
+          fpsEl.innerText = `${currentFps} FPS`;
+        } else if (desktopState.isIdleStandby || (now - desktopState.lastActiveTime < 2500)) {
+          fpsEl.innerText = `静止 (待机)`;
+        } else {
+          fpsEl.innerText = `0 FPS`;
+        }
+      }
     }
     desktopState.frameCount = 0;
     desktopState.lastFrameTime = now;
@@ -714,12 +695,15 @@ export async function stopAndCloseDesktop() {
   if (tid && desktopState.isLocalMouseDown) {
     releaseAllInputs(tid);
   }
+  if (desktopState.reconnectTimer) {
+    clearTimeout(desktopState.reconnectTimer);
+    desktopState.reconnectTimer = null;
+  }
   desktopState.currentStreamTid = null;
   desktopState.currentStreamDisplayIndex = 0;
   desktopState.activeMonitorsList = [];
-  desktopState.pendingMouseMove = null;
-  desktopState.isFlushingMove = false;
   desktopState.isLocalMouseDown = false;
+  desktopState.isIdleStandby = false;
 
   if (tid) {
     try {

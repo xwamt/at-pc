@@ -23,10 +23,7 @@ pub fn inject_input_event(event: DesktopInputEvent) -> Result<(), String> {
                 let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
                 let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
-                // 1. Direct hardware cursor positioning via SetCursorPos
-                SetCursorPos(px, py);
-
-                // 2. Dispatch standard SendInput for WM_MOUSEMOVE window message generation
+                // Dispatch standard SendInput for hardware positioning and WM_MOUSEMOVE message generation
                 let norm_x = if vw > 0 {
                     (((px - vx) as i64 * 65535) / vw as i64).clamp(0, 65535) as i32
                 } else {
