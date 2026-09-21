@@ -322,22 +322,49 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config::default_data_dir().join("keys.json")
     });
 
+    // The bootstrap key file has to live exactly where `KeyStore::load_or_create` looks for
+    // it — beside the keys file. Writing it to the default data dir while `--keys-file` points
+    // elsewhere (or is relative) produces an *empty* key store, a banner advertising a root key
+    // that never authenticates, and — because an empty store counts as "no credentials
+    // configured" on a loopback listener — a console that answers 200 to unauthenticated
+    // requests. Both sides now resolve the location through the same helper.
+    let bootstrap_dir = bootstrap::keystore_sidecar_dir(&keys_file);
+
     if !config.bootstrap_disabled {
-        let data_dir = config::default_data_dir();
-        match bootstrap::ensure_bootstrap_key_with_keys_file(&data_dir, Some(&keys_file)) {
+        match bootstrap::ensure_bootstrap_key_with_keys_file(&bootstrap_dir, Some(&keys_file)) {
             Ok(bootstrap::BootstrapOutcome::Generated(ref key)) => {
-                bootstrap::print_bootstrap_banner(key);
+                let file = bootstrap::bootstrap_key_path(&bootstrap_dir);
+                bootstrap::print_bootstrap_banner_with_file(key, &file);
             }
             Ok(bootstrap::BootstrapOutcome::Existing(_)) | Ok(bootstrap::BootstrapOutcome::Skipped) => {}
             Err(e) => {
-                error!("Failed to ensure bootstrap key: {e}");
+                // Fatal: a key store that exists but cannot be used must never be papered over.
+                // Continuing would boot with the API gate effectively unconfigured, which looks
+                // identical to a healthy server from the outside.
+                eprintln!("FATAL: cannot establish the root API key: {e}");
+                eprintln!("Refusing to start.");
+                std::process::exit(1);
             }
         }
     }
 
-    let keystore = at_pc_server::keystore::KeyStore::load_or_create(&keys_file)
-        .ok()
-        .map(Arc::new);
+    // An unreadable key store is a hard startup failure. Silently downgrading to `None`
+    // (the previous `.ok()`) turned "credentials exist on disk but cannot be parsed" into
+    // "no credentials configured", which is exactly the state the boot gate is meant to
+    // refuse — and it left the loopback auto-admin fallback able to hand out Admin.
+    let keystore = match at_pc_server::keystore::KeyStore::load_or_create(&keys_file) {
+        Ok(ks) => Some(Arc::new(ks)),
+        Err(e) => {
+            eprintln!(
+                "FATAL: failed to load key store at {}: {e}",
+                keys_file.display()
+            );
+            eprintln!(
+                "Refusing to start: an unreadable key store would otherwise disable API authentication."
+            );
+            std::process::exit(1);
+        }
+    };
     let has_keystore_keys = keystore.as_ref().map(|k| k.has_active_keys()).unwrap_or(false);
 
     // Reject plaintext legacy credentials (both [roles] and auth_token) if KeyStore is active

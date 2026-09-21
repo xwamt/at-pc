@@ -135,7 +135,20 @@ pub fn create_mcp_http_router_with_keystore(
         let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
             crate::config::default_data_dir().join("keys.json")
         });
-        KeyStore::load_or_create(&keys_file).ok().map(Arc::new)
+        // Never swallow this: a key store that exists but cannot be parsed must not be
+        // mistaken for "no key store configured". Callers on the server bootstrap path
+        // pass an explicit keystore and refuse to start on failure; this fallback exists
+        // only for tests and legacy callers, and it still has to say so out loud.
+        match KeyStore::load_or_create(&keys_file) {
+            Ok(ks) => Some(Arc::new(ks)),
+            Err(e) => {
+                tracing::error!(
+                    "failed to load key store at {}: {e}; HTTP auth will fail closed (no credentials loaded)",
+                    keys_file.display()
+                );
+                None
+            }
+        }
     });
     let rate_limiter = Arc::new(AuthRateLimiter::default());
     let session_store = Arc::new(crate::session::SessionStore::default());
@@ -312,7 +325,7 @@ pub async fn auth_layer(
     if resolved_role.is_none() {
         if state.config.insecure_no_auth {
             resolved_role = Some(crate::config::Role::Admin);
-        } else if peer_loopback && !state.config.has_credentials() && state.keystore.as_ref().map(|k| !k.has_active_keys()).unwrap_or(true) {
+        } else if peer_loopback && !state.config.has_credentials() && state.keystore.as_ref().map(|k| !k.has_active_keys()).unwrap_or(false) {
             resolved_role = Some(crate::config::Role::Admin);
         }
     }

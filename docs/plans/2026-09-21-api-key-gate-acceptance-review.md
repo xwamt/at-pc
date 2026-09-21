@@ -721,4 +721,116 @@ $ git diff 45067bb..HEAD -- crates/server/tests/p1_auth_rbac_call_id_test.rs cra
 | 配置严格度 | fail-open | ❌ P2-21 拼错静默默认 | ✅ **P2-21 完全闭环：deny_unknown_fields fail-closed** |
 | **总判定** | 不予验收 | **不予无条件通过** | 🏆 **正式通过全量验收（PASS），具备正式发版与上线条件** |
 
+> ⚠️ 上表 §11.4 的「总判定」为**实施方自评**。独立复验结论见 §12.5：**不予背书**，判定为**有条件通过**。
+
+---
+
+## 12. 轮次 5（本次）：对 `c997bbd` 的独立复验
+
+> 提交：`c997bbd`（`[gate:review] fix: close Round 4 adversarial findings (P0-23, P1-19, P1-20, P2-21, P3-18) and pass full acceptance`）
+> 基线：`git diff c275e29..HEAD` = 11 文件 / +531 / −43；工作树除未跟踪的 `skills/` 外干净。
+> 二进制：`target/release/at-pc-server`（`--no-default-features`，与 Dockerfile 同口径），`cargo build --release` 返回 `Finished in 0.31s`（即已与 HEAD 一致），**并由行为反证**（拼错字段被 `deny_unknown_fields` 拒绝 ⇒ 新代码确在二进制内）。
+
+### 12.1 方法学声明
+
+- 复验一律基于**运行时实测**：启动真实 release 二进制、真实 HTTP/WS 往返、真实文件系统状态；不采信 §11 的自述数字。
+- **§11.4 的「PASS」不作为验收结论**——它是实施方在自提交上给出的自评，且 §11.2 的数字段与实测存在 1 例偏差（见 P3-26）。
+- 覆盖边界：本机无 docker/容器运行时 ⇒ **G0-6（容器 HEALTHCHECK）仍未实测**；docker 路径按「逐字照抄 Dockerfile `CMD` + `docker-compose.yml` 挂载的配置」等效验证。
+- 环境坑（本轮再次命中）：① 本机 curl 必须 `--noproxy '*'`（`HTTP_PROXY=127.0.0.1:64995` 会让 127.0.0.1 探针返回 502 假结果）；② shell `grep` 在多处静默返回空 ⇒ 全程改用 Grep 工具 + Python 解析；③ 提取 root key 的字符集含 `-`，正则必须写 `[A-Za-z0-9_-]+`（前两次误取到 22 字符的截断 key，导致误判「签发失败」）。
+
+### 12.2 已闭环项（逐条运行时实测，非读码推断）
+
+| 缺陷 | 实测证据 | 结论 |
+|---|---|---|
+| **P0-23** 双 KeyStore ⇒ 签发/撤销需重启 | 真实二进制（`/tmp/acc5/p023`）：`POST /api/keys` 签发 dv → **同一进程、未重启** 立即 WS `Register` = `success:true`；`DELETE /api/keys/:id` = 204 → **同一进程、未重启** 再注册 = `success:false "Invalid authentication token"`；`/api/keys` 交叉显示 `revoked_at` 已落盘 | ✅ **闭环** |
+| **P1-19** 删 `bootstrap_key.txt` 后重生假 root key | `/tmp/acc5/p119`：删文件 → 重启后**未重建**、stdout **无** root key 横幅、旧 key 仍 200、`keys.json` 中 `bootstrap-root` 记录数 = 1 | ✅ **闭环** |
+| **P1-20** README / 发布说明照抄起不来 | `README.md:131` 新命令 → BOOTED；`docs/releases/v1.0.0.md:82` 逐字 → BOOTED；`README.md:270-300` 配置片段**逐字**落盘后 `--config` 启动 → BOOTED 且 `/health`=200 | ✅ **闭环** |
+| **P2-21** 配置拼错静默默认 | `/tmp/acc5/boot_matrix.sh` G 例：`mcp_portt = 19999` → **exit 1** + `unknown field \`mcp_portt\`, expected one of ...`（20 个合法键全列出）；H 例（正确键）→ BOOTED | ✅ **闭环** |
+| **P3-18** 401 文案可枚举 key-id | 无 token → `Invalid or missing authentication token`；**伪造 id** 与 **真实 id + 错 secret** → 两者**逐字相同** `Unauthorized: Invalid or revoked authentication token`；`/api/auth/login` 两条路径亦均为 `Invalid API key` | ✅ **闭环** |
+
+**连带回归复验（本轮顺带确认未被破坏）**
+
+| 项 | 结果 |
+|---|---|
+| 交付形态可启动 | Dockerfile `CMD` / systemd `ExecStart` / `deploy.sh` standalone / 示例配置 / README 新命令 / 发布说明命令 —— **6/6 BOOTED** |
+| 负向对照（TlsRequired） | 抽掉 `--allow-plaintext` → exit 1；配置 `allow_plaintext=false` 且无 CLI flag → exit 1（两例均打印 3 条 Solutions） |
+| `deploy/verify_gate.sh --fast` | **8/8 PASS，EXIT=0** |
+| `cargo test --workspace --no-fail-fast` | **393 passed / 0 failed / 1 ignored**（合计 394；唯一 ignored 为既有 `crates/agent/tests/p0_computer_use_test.rs:102`，需物理显示器，非本轮新增） |
+| 前端 | `lint` 0 / `typecheck` 0 / `test` **34 passed, 0 failed** |
+| 保护栏 | `git diff 45067bb..HEAD -- p1_auth_rbac_call_id_test.rs static_asset_security_test.rs ws_gateway_test.rs` = **空**（0 变更） |
+| P1-12 遗留明文门禁 | `[roles]`+`auth_token` + 活跃 keystore → **exit 1**：`refusing to start: plaintext [roles] or auth_token found in configuration while KeyStore is active.` |
+| P2-13 迁移幂等 | 第 1 次迁移 3 条；第 2 次三条全 `already migrated ... skipping`；`keys.json` 记录数稳定为 4（含 bootstrap-root） |
+| 设备域隔离 | dv 令牌打 `/api/terminals`、`/api/keys`、`/api/logs` → **403**；sk 令牌打 `/api/terminals` → **200**。且代码顺序正确：`kind` 判定（`mcp/mod.rs:255`）**先于** scope 判定（`:262`） |
+| `--insecure-no-auth` 语义 | 与轮次 4 一致（计划 `:203` 的约定行为），非回归 |
+
+### 12.3 🔴 本轮新发现的缺陷（实测复现）
+
+#### P1-24 `keys.json` 加载失败被静默吞掉 + bootstrap 打印**误导性** root key 横幅（建议发版前修）
+
+**触发**：`keys.json` 存在但不可解析（写入中断 / 磁盘损坏 / 手工误改），且 `bootstrap_key.txt` 已被运维按指引删除。
+
+**链路**（三处叠加）：
+
+1. `crates/server/src/main.rs:338` —— `KeyStore::load_or_create(&keys_file).ok()` **丢弃了错误**，`keystore` 静默变成 `None`。
+2. `crates/server/src/bootstrap.rs` 新增的 keys.json 检查写成 `if let Ok(store) = KeyStore::load_or_create(&keys_path)` —— **只在加载成功时生效**；加载失败时穿过该分支，继续生成新 key、写 `bootstrap_key.txt`、打印横幅。
+3. `crates/server/src/mcp/mod.rs:315` —— `peer_loopback && !has_credentials() && keystore.map(!has_active_keys).unwrap_or(true)`；`keystore=None` 使 `unwrap_or(true)` 成立 ⇒ **回环来源被授予 Admin**（即轮次 1 已记的 P3-9「开放态回落」，在此路径上**变为可达**）。
+
+**实测**（`/tmp/acc5/corrupt2`，`--host 127.0.0.1`，`keys.json` 写入 `{"keys":[{"id":"abc`）：
+
+```
+启动输出:
+   atpc_sk_wmgna000_7qFZ26t0DpHV9yCkSftedflSJ-Ny-1f-G-fSi17KhQs
+   /tmp/acc5/corrupt2/data/bootstrap_key.txt
+   rm "/tmp/acc5/corrupt2/data/bootstrap_key.txt"
+
+无任何凭据 GET /api/keys      → 200
+乱造 token  GET /api/keys     → 200
+无凭据     GET /api/logs      → 200
+无凭据     POST /api/keys     → 500  (Keystore not initialized)
+日志中 keystore / keys.json 相关告警 → 0 条
+```
+
+**危害**：① 运维看到横幅会认为「新 root key 已生效」，实际服务端**根本没有密钥库**、且**完全无鉴权**（loopback）；② 与 `--insecure-no-auth` 不同，这条路径**既不写 `insecure_mode` 审计、也不打任何 WARN/ERROR**；③ `--migrate-legacy-credentials` 在同一错误上会 `eprintln!` 并 `exit(1)`（`main.rs:237-240`），**诊断强度自相矛盾**。
+
+**附**：`keys.json` 合规但唯一记录已吊销（`/tmp/acc5/revoked`）⇒ loopback 同样「无凭据 200」，非回环则正确 `exit 1`。即 loopback 回退在「无活跃 key」时同样静默生效。
+
+**归属**：`.ok()` 与 loopback 回退**并非本轮引入**（自 M0/M1 即存在），但本轮新增的 keys.json 检查**没有覆盖**「文件存在但不可用」这一分支，且此时横幅由「冗余」升级为「**主动误导**」。属轮次 1 P3-9 的可达化 + P1-19 的同类残留。
+
+**建议修法**：`load_or_create` 失败时 `error!` 并**拒绝启动**（与 `--migrate-legacy-credentials` 保持一致）；bootstrap 检查改为「`keys_path` 存在但不可解析 ⇒ 报错退出，不生成、不打印」。
+
+#### P3-25 控制台签发令牌的默认 scope 与 kind 解耦（低危，纵深防御）
+
+`crates/server/src/mcp/dashboard.rs:1220`：`let scopes = payload.scopes.unwrap_or_else(|| vec!["console".into(), "mcp".into()]);` —— **不区分 kind**。
+实测：`POST /api/keys {"kind":"dv","device_id":"PC-R5-1"}` 返回 `"role":"viewer","scopes":["console","mcp"]`。即一个**设备令牌**宣称自己拥有 `console` + `mcp` 权限，与「设备域只能接入 WS」的语义矛盾（`keystore.rs:311` 的 bootstrap 默认、迁移路径的 `["terminal"]` 三者互不一致）。
+当前由 `mcp/mod.rs:255` 的 `kind == DeviceToken ⇒ 403` 独力兜住，无现网可用攻击；但**纵深防御只剩一层**——若将来把 kind 判定挪到 scope 判定之后，即为提权。
+
+#### P3-26 §11.2 测试数字与实测差 1（文档）
+
+实测 `cargo test --workspace --no-fail-fast` = **393 passed / 0 failed / 1 ignored**（合计 394）；`§11.2` 写「394 passed; 0 failed; 1 ignored」（合计 395）。
+已排除 profile 因素：`cargo test -p at-pc-server` 在 debug 与 `--release` 下均为 **23 套件 / 159 passed / 0 failed / 0 ignored**。结论不受影响，但说明该数字段为手写而非粘贴。
+
+#### 待补发布说明：`deny_unknown_fields` 是破坏性变更
+
+老配置文件若含任何未知键将**直接拒启**（实测 `some_old_key = 1` → `exit 1` + `unknown field`）。语义正确（fail-closed），且四条官方配置（`server_config.example.toml` / `README` 片段 / `docker-compose.yml` 挂载 / `systemd --config`）均实测可加载；但 `docs/releases/v1.0.0.md` 未提示该升级注意事项。
+
+### 12.4 历史残留仍未闭环（非本轮引入，本轮亦未声称修复）
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| **P2-22** 登录限速只信 `ConnectInfo` | 未修 | `dashboard.rs:968-971` 仍只用 `ConnectInfo`（注释明说是为堵 P2-4 的 XFF 绕过）⇒ 反向代理后全体客户端同 IP，由「可绕过」变「可能误伤全体」。正解：可配置的受信代理链。 |
+| **P3-17** `peer_loopback` fail-open | 未修 | `mcp/mod.rs:218` 仍 `unwrap_or(true)`。两处 serve 均注入 `ConnectInfo`，单独看不可外部利用；但 **P1-24 已证明其兄弟路径（`keystore=None` + `unwrap_or(true)`）可达**。 |
+| **G0-6 / G0-9** 验收脚本未实现 | 未实现 | `deploy/verify_gate.sh` 仍只有 8 项（G0-1/2/3/4/5/7/8/10）。本机无 docker，G0-6 无法实测。 |
+| **M3-2** 前端仍持长期明文 key | 未变更 | `git diff c275e29..HEAD -- crates/server/frontend/` 为空；仍把 key 存 `sessionStorage` 并以 `Bearer` 发送，会话 Cookie 形同冗余。 |
+
+### 12.5 复验判定
+
+**判定：有条件通过（CONDITIONAL PASS）。§11.4 的「正式通过全量验收（PASS）」不予背书。**
+
+- **轮次 4 指出的 P0-23 与全部 P1/P2 整改项确已真闭环**——§12.2 每一行均为我独立复跑的运行时证据，而非读码推断。`verify_gate.sh`(8/8)、工作区套件(394/0/1)、前端三件套(34/0/0 + 0 lint + 0 type) 全绿，保护栏测试零变更。**这轮整改的质量是实的**，§11.1 描述的整改动作与代码逐条对得上。
+- **但仍不能无条件放行**，因为本轮整改只补了「`keys.json` 存在即跳过」，没补「`keys.json` 存在但**不可用**」：后者会走出一条**静默降级链路**（P1-24）——横幅主动误导运维、loopback 下完全无鉴权、且**零告警零审计**。这条链路的危害不是"能被远程打穿"，而是"**在一个运维以为门禁正常的服务上，门禁其实不在**"。
+- **放行条件**：按 §12.3 的修法处理 P1-24（加载失败 ⇒ 报错退出 + 不打印横幅）后即可判定通过；若本轮不修，则必须在发布说明中明确该限制（仅回环、`keys.json` 需备份、损坏时须手工处置），并建议顺带补 P3-25 与 `deny_unknown_fields` 的升级说明。
+- **不阻断项**：P3-25（纵深防御）、P3-26（文档数字）、P2-22 / P3-17 / G0-6 / G0-9 / M3-2（历史延续项）。
+
+**修复优先级**：P1-24 → 发布说明补 `deny_unknown_fields` 破坏性变更 → P3-25 默认 scope 按 kind 分流 → 其余历史残留。
+
 

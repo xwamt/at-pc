@@ -174,6 +174,22 @@ fn write_key_file(path: &Path, key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Directory in which `KeyStore::load_or_create` looks for `bootstrap_key.txt`, given a
+/// keys-file path.
+///
+/// The bootstrap writer and the keystore migrator have to agree on this, otherwise the key
+/// is written to a directory the keystore never reads: the store comes up empty, the startup
+/// banner advertises a root key that cannot authenticate, and a loopback listener treats the
+/// empty store as "no credentials configured" and answers 200 to unauthenticated requests.
+///
+/// An empty or bare relative path resolves to the process CWD, mirroring the keystore.
+pub fn keystore_sidecar_dir(keys_file: &Path) -> PathBuf {
+    match keys_file.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
 /// Ensures a bootstrap root key exists in `data_dir`.
 ///
 /// - File already present and parseable: returns [`BootstrapOutcome::Existing`].
@@ -199,11 +215,33 @@ pub fn ensure_bootstrap_key_with_keys_file(
         .unwrap_or_else(|| data_dir.join("keys.json"));
 
     if keys_path.exists() {
-        if let Ok(store) = crate::keystore::KeyStore::load_or_create(&keys_path) {
-            if store.has_active_keys() {
-                return Ok(BootstrapOutcome::Skipped);
-            }
+        // Fail closed on a key store that exists but is unusable.
+        //
+        // A bootstrap root key is only ever registered into `keys.json` on the
+        // *absent*-file branch of `KeyStore::load_or_create`. So once `keys.json`
+        // exists, any key minted here would never authenticate. Swallowing the load
+        // error (the previous `if let Ok(store)`) therefore did two harmful things at
+        // once: it printed a convincing "this is your new root key" banner for a key
+        // that cannot log in, and it let the process boot with no usable credentials
+        // at all — a state an operator cannot distinguish from a healthy gate.
+        // Refusing to start is strictly safer.
+        let store = crate::keystore::KeyStore::load_or_create(&keys_path).map_err(|e| {
+            format!(
+                "key store {} exists but could not be loaded: {e}. Refusing to generate a \
+                 bootstrap key that would never be registered. Restore the file from backup, \
+                 or delete it to re-initialize (this revokes all existing keys).",
+                keys_path.display()
+            )
+        })?;
+        if store.has_active_keys() {
+            return Ok(BootstrapOutcome::Skipped);
         }
+        return Err(format!(
+            "key store {} exists but holds no active (unrevoked) key. Refusing to write a \
+             bootstrap key that would never be registered. Restore the file from backup, \
+             or delete it to re-initialize (this revokes all existing keys).",
+            keys_path.display()
+        ));
     }
 
     let key = generate_api_key().map_err(|e| format!("CSPRNG failure: {e}"))?;
@@ -331,6 +369,58 @@ mod tests {
             !bootstrap_file.exists(),
             "bootstrap_key.txt must not be recreated when keys.json exists"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "atpc-bootstrap-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    /// P1-24: an unparseable `keys.json` must abort bootstrap rather than mint a root key
+    /// that the key store will never accept, which the startup banner would still advertise
+    /// as valid while the server ran with authentication effectively disabled.
+    #[test]
+    fn bootstrap_refuses_to_generate_on_corrupt_keystore() {
+        let dir = unique_dir("corrupt");
+        std::fs::write(dir.join("keys.json"), "{\"keys\":[{\"id\":\"abc").expect("write corrupt");
+
+        let err = ensure_bootstrap_key(&dir).expect_err("corrupt store must not be bypassed");
+        assert!(
+            err.contains("could not be loaded"),
+            "error must name the unreadable store, got: {err}"
+        );
+        assert!(
+            !bootstrap_key_path(&dir).exists(),
+            "no phantom bootstrap_key.txt may be written over a corrupt store"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// P1-24: an existing store holding no active key (fresh `--no-bootstrap` run, or every
+    /// key revoked) gets the same fail-closed treatment — the new key would never be
+    /// registered into `keys.json`, so printing one is pure theatre.
+    #[test]
+    fn bootstrap_refuses_to_generate_when_store_has_no_active_key() {
+        let dir = unique_dir("noactive");
+        std::fs::write(dir.join("keys.json"), "{\"keys\":[]}").expect("write empty store");
+
+        let err = ensure_bootstrap_key(&dir).expect_err("empty store must not be bypassed");
+        assert!(
+            err.contains("no active"),
+            "error must explain the empty store, got: {err}"
+        );
+        assert!(!bootstrap_key_path(&dir).exists());
 
         std::fs::remove_dir_all(&dir).ok();
     }
