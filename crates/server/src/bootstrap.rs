@@ -32,12 +32,15 @@ pub enum BootstrapOutcome {
     Generated(String),
     /// A previously written bootstrap file was read back.
     Existing(String),
+    /// Bootstrap was skipped because KeyStore credentials already exist.
+    Skipped,
 }
 
 impl BootstrapOutcome {
-    pub fn key(&self) -> &str {
+    pub fn key(&self) -> Option<&str> {
         match self {
-            BootstrapOutcome::Generated(k) | BootstrapOutcome::Existing(k) => k,
+            BootstrapOutcome::Generated(k) | BootstrapOutcome::Existing(k) => Some(k.as_str()),
+            BootstrapOutcome::Skipped => None,
         }
     }
 }
@@ -174,15 +177,35 @@ fn write_key_file(path: &Path, key: &str) -> Result<(), String> {
 /// Ensures a bootstrap root key exists in `data_dir`.
 ///
 /// - File already present and parseable: returns [`BootstrapOutcome::Existing`].
-/// - No file (or an unparseable one): generates a new key, writes it with 0600
-///   permissions and returns [`BootstrapOutcome::Generated`].
-///
-/// The caller is expected to register the returned key as an in-memory admin
-/// credential and to print the banner only for `Generated`.
+/// - No file (or an unparseable one):
+///   - If `keys.json` already exists with active credentials: KeyStore is already initialized;
+///     does NOT generate an orphan phantom key and returns [`BootstrapOutcome::Skipped`].
+///   - Otherwise: generates a new key, writes it with 0600 permissions and returns [`BootstrapOutcome::Generated`].
 pub fn ensure_bootstrap_key(data_dir: &Path) -> Result<BootstrapOutcome, String> {
+    ensure_bootstrap_key_with_keys_file(data_dir, None)
+}
+
+/// Ensures a bootstrap root key exists in `data_dir`, checking an optional custom `keys_file` path.
+pub fn ensure_bootstrap_key_with_keys_file(
+    data_dir: &Path,
+    keys_file: Option<&Path>,
+) -> Result<BootstrapOutcome, String> {
     if let Some(key) = read_bootstrap_key(data_dir) {
         return Ok(BootstrapOutcome::Existing(key));
     }
+
+    let keys_path = keys_file
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| data_dir.join("keys.json"));
+
+    if keys_path.exists() {
+        if let Ok(store) = crate::keystore::KeyStore::load_or_create(&keys_path) {
+            if store.has_active_keys() {
+                return Ok(BootstrapOutcome::Skipped);
+            }
+        }
+    }
+
     let key = generate_api_key().map_err(|e| format!("CSPRNG failure: {e}"))?;
     write_key_file(&bootstrap_key_path(data_dir), &key)?;
     Ok(BootstrapOutcome::Generated(key))
@@ -254,6 +277,7 @@ mod tests {
         match second {
             BootstrapOutcome::Existing(_) => {}
             BootstrapOutcome::Generated(_) => panic!("second call must not regenerate"),
+            BootstrapOutcome::Skipped => panic!("second call with existing bootstrap file must not be skipped"),
         }
         #[cfg(unix)]
         {
@@ -270,5 +294,44 @@ mod tests {
         let content = render_key_file(Path::new("/tmp/x/bootstrap_key.txt"), &key);
         assert_eq!(extract_key_line(&content).as_deref(), Some(key.as_str()));
         assert!(content.contains("rm \"/tmp/x/bootstrap_key.txt\""));
+    }
+
+    #[test]
+    fn bootstrap_skips_generation_when_keystore_has_active_keys() {
+        let dir = std::env::temp_dir().join(format!(
+            "atpc-bootstrap-skip-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        // 1. First boot generates key and writes bootstrap_key.txt
+        let first = ensure_bootstrap_key(&dir).expect("bootstrap");
+        assert!(matches!(first, BootstrapOutcome::Generated(_)));
+
+        // 2. KeyStore loads and migrates bootstrap_key.txt into keys.json
+        let keys_file = dir.join("keys.json");
+        let store = crate::keystore::KeyStore::load_or_create(&keys_file).expect("keystore");
+        assert!(store.has_active_keys());
+
+        // 3. Operator deletes bootstrap_key.txt
+        let bootstrap_file = bootstrap_key_path(&dir);
+        assert!(bootstrap_file.exists());
+        std::fs::remove_file(&bootstrap_file).expect("remove bootstrap file");
+
+        // 4. Second boot: bootstrap_key.txt is missing, but keys.json has active keys
+        let second = ensure_bootstrap_key(&dir).expect("second bootstrap");
+        assert_eq!(second, BootstrapOutcome::Skipped);
+
+        // Verify bootstrap_key.txt was NOT recreated!
+        assert!(
+            !bootstrap_file.exists(),
+            "bootstrap_key.txt must not be recreated when keys.json exists"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -105,6 +105,7 @@ fn default_sweep_interval_secs() -> u64 {
 
 /// Configuration for the centralized at-pc server
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// Host address to listen on (default: "0.0.0.0")
     #[serde(default = "default_listen_host")]
@@ -405,4 +406,37 @@ pub fn handler_min_role(path: &str, method: &str) -> Option<Role> {
         return Some(Role::Viewer);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_config_rejects_unknown_fields() {
+        let toml_with_typo = r#"
+            listen_host = "127.0.0.1"
+            mcp_portt = 19999
+        "#;
+        let result: Result<ServerConfig, _> = toml::from_str(toml_with_typo);
+        assert!(result.is_err(), "misspelled config keys must fail deserialization");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("unknown field `mcp_portt`") || err_msg.contains("mcp_portt"),
+            "error must mention misspelled field, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn server_config_accepts_valid_config() {
+        let valid_toml = r#"
+            listen_host = "127.0.0.1"
+            mcp_port = 19999
+            allow_plaintext = true
+        "#;
+        let config: ServerConfig = toml::from_str(valid_toml).expect("valid toml");
+        assert_eq!(config.listen_host, "127.0.0.1");
+        assert_eq!(config.mcp_port, 19999);
+        assert!(config.allow_plaintext);
+    }
 }

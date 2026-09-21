@@ -9,7 +9,7 @@ use at_pc_server::router::McpRouter;
 use at_pc_server::ws::{start_ws_server_with_state, TerminalRegistry, WsServerState};
 use at_pc_server::{
     abort_and_join_tasks, shutdown_persistence, shutdown_signal,
-    start_mcp_http_server_with_shutdown, AuthRateLimiter, KeyStore,
+    start_mcp_http_server_with_shutdown_and_keystore, AuthRateLimiter, KeyStore,
 };
 
 /// CLI arguments for server bootstrap and authentication gate
@@ -318,23 +318,26 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     config.bootstrap_disabled = args.no_bootstrap;
     config.insecure_no_auth = args.insecure_no_auth;
 
+    let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
+        config::default_data_dir().join("keys.json")
+    });
+
     if !config.bootstrap_disabled {
         let data_dir = config::default_data_dir();
-        match bootstrap::ensure_bootstrap_key(&data_dir) {
+        match bootstrap::ensure_bootstrap_key_with_keys_file(&data_dir, Some(&keys_file)) {
             Ok(bootstrap::BootstrapOutcome::Generated(ref key)) => {
                 bootstrap::print_bootstrap_banner(key);
             }
-            Ok(bootstrap::BootstrapOutcome::Existing(_)) => {}
+            Ok(bootstrap::BootstrapOutcome::Existing(_)) | Ok(bootstrap::BootstrapOutcome::Skipped) => {}
             Err(e) => {
                 error!("Failed to ensure bootstrap key: {e}");
             }
         }
     }
 
-    let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
-        config::default_data_dir().join("keys.json")
-    });
-    let keystore = at_pc_server::keystore::KeyStore::load_or_create(&keys_file).ok();
+    let keystore = at_pc_server::keystore::KeyStore::load_or_create(&keys_file)
+        .ok()
+        .map(Arc::new);
     let has_keystore_keys = keystore.as_ref().map(|k| k.has_active_keys()).unwrap_or(false);
 
     // Reject plaintext legacy credentials (both [roles] and auth_token) if KeyStore is active
@@ -391,10 +394,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         let proxy = event_loop.create_proxy();
                         let completion_proxy = proxy.clone();
                         let server_config = config.clone();
+                        let pipeline_keystore = keystore.clone();
 
                         rt.spawn(async move {
                             if let Err(e) = run_server_pipeline(
                                 server_config,
+                                pipeline_keystore,
                                 stdio_mode,
                                 Some(shutdown_broadcast_rx),
                                 Some(completion_proxy),
@@ -418,23 +423,23 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         error!(
                             "Failed to initialize server tray ({e}); falling back to console mode"
                         );
-                        rt.block_on(run_server_pipeline(config, stdio_mode, None, None))
+                        rt.block_on(run_server_pipeline(config, keystore, stdio_mode, None, None))
                     }
                 }
             }
             Err(e) => {
                 error!("Failed to create event loop for tray ({e}); falling back to console mode");
-                rt.block_on(run_server_pipeline(config, stdio_mode, None, None))
+                rt.block_on(run_server_pipeline(config, keystore, stdio_mode, None, None))
             }
         }
     } else {
-        rt.block_on(run_server_pipeline(config, stdio_mode, None, None))
+        rt.block_on(run_server_pipeline(config, keystore, stdio_mode, None, None))
     }
 
     #[cfg(not(feature = "tray"))]
     {
         let _ = enable_tray;
-        rt.block_on(run_server_pipeline(config, stdio_mode, None, None))
+        rt.block_on(run_server_pipeline(config, keystore, stdio_mode, None, None))
     }
 }
 
@@ -447,6 +452,7 @@ type TrayCompletionProxy = Option<()>;
 
 async fn run_server_pipeline(
     config: ServerConfig,
+    keystore: Option<Arc<KeyStore>>,
     stdio_mode: bool,
     shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
     completion_proxy: TrayCompletionProxy,
@@ -523,10 +529,6 @@ async fn run_server_pipeline(
     );
 
     // 4. Start WebSocket Gateway in background
-    let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
-        config::default_data_dir().join("keys.json")
-    });
-    let keystore = KeyStore::load_or_create(&keys_file).ok().map(Arc::new);
     let rate_limiter = Arc::new(AuthRateLimiter::default());
 
     let mut ws_state = WsServerState::with_handler(registry.clone(), config.clone(), router.clone());
@@ -556,10 +558,16 @@ async fn run_server_pipeline(
     let gateway_result = if stdio_mode {
         let http_router = router.clone();
         let http_config = config.clone();
+        let http_keystore = keystore.clone();
         background_http = Some(tokio::spawn(async move {
             if let Err(e) =
-                start_mcp_http_server_with_shutdown(http_router, http_config, shutdown_signal())
-                    .await
+                start_mcp_http_server_with_shutdown_and_keystore(
+                    http_router,
+                    http_config,
+                    http_keystore,
+                    shutdown_signal(),
+                )
+                .await
             {
                 error!("MCP HTTP/Web gateway error in stdio mode: {}", e);
             }
@@ -569,7 +577,13 @@ async fn run_server_pipeline(
             () = shutdown_signal() => Ok(()),
         }
     } else {
-        start_mcp_http_server_with_shutdown(router.clone(), config, shutdown_future).await
+        start_mcp_http_server_with_shutdown_and_keystore(
+            router.clone(),
+            config,
+            keystore.clone(),
+            shutdown_future,
+        )
+        .await
     };
 
     let mut handles = vec![ws_handle, sweep_handle];

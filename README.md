@@ -127,8 +127,8 @@ python3 scripts/package_dist.py --all
 #### 1. 启动中心网关服务端 (`at-pc-server`)
 
 ```bash
-# 启动服务端 (默认监听本地，MCP 端口 9800，WebSocket 端口 9801)
-./at-pc-server-macos --host 0.0.0.0 --ws-port 9801 --mcp-port 9800
+# 启动服务端 (默认监听本地，MCP 端口 9800，WebSocket 端口 9801；非回环无 TLS 需携带 --allow-plaintext)
+./at-pc-server-macos --host 0.0.0.0 --ws-port 9801 --mcp-port 9800 --allow-plaintext
 
 # 访问内嵌 Web 管理控制台
 open http://localhost:9800/
@@ -273,6 +273,9 @@ enable_computer_use = true
 # 监听 IP 地址：设为 "0.0.0.0" 允许外部网络访问
 listen_host = "0.0.0.0"
 
+# 非回环监听且未配置 TLS 证书时，必须显式允许明文传输（生产环境建议配置 TLS 证书）
+allow_plaintext = true
+
 # WebSocket 终端连接端口与路径
 ws_port = 9801
 ws_path = "/ws"
@@ -321,16 +324,18 @@ AT-PC 在工程落地中推行极致的性能标准，并设立了由 CI 硬性�
 
 ## 🔑 门禁与首启密钥
 
-服务端自 v1.x 起内置 **API Key 门禁**：非回环监听（如 `--host 0.0.0.0`）+ 无凭据时，服务**拒绝启动**。`/health` 对回环来源免凭据，本地开发无影响。
+服务端自 v1.x 起内置 **安全双门禁**：
+1. **API Key 凭据门禁**：非回环监听（如 `--host 0.0.0.0`）且无凭据时，服务**拒绝启动**。`/health` 对回环来源免凭据，本地开发无影响。
+2. **TLS 传输加密门禁**：非回环监听在未配置 TLS 证书时，必须显式携带 `--allow-plaintext` 命令行参数（或配置文件指定 `allow_plaintext = true`），否则出于传输安全考虑**拒绝启动**。生产环境强烈建议配置 TLS 证书。
 
 ### ① 首启自动生成 root key
 
-首次启动（数据目录内无 `bootstrap_key.txt`）时，server 自动生成 root API Key，格式为 `atpc_sk_<8字符ID>_<43字符secret>`，并通过**两个通道**提供给运维：
+首次启动（数据目录内无 `bootstrap_key.txt` 且无 `keys.json`）时，server 自动生成 root API Key，格式为 `atpc_sk_<8字符ID>_<43字符secret>`，并通过**两个通道**提供给运维：
 
 - **启动日志（stdout / `docker logs at-pc-server`）**：首启时直接打印，前缀为 `atpc_sk_`。
 - **文件落盘**：写入 `<data_dir>/bootstrap_key.txt`，权限 `0600`。
 
-建议**抄录 key 后即删除该文件**，避免长期明文留存：
+建议**抄录 key 后即删除该文件**，避免长期明文留存（删除后服务端重启不会重新生成孤儿 root key，已签发凭据持久化保存在 `keys.json` 中）：
 
 ```bash
 # 查看（仅 root 可读）

@@ -58,6 +58,15 @@ pub fn default_log_file_path() -> std::path::PathBuf {
 
 /// Create Axum router for the MCP HTTP/SSE gateway
 pub fn create_mcp_http_router(router: Arc<McpRouter>, config: ServerConfig) -> Router {
+    create_mcp_http_router_with_keystore(router, config, None)
+}
+
+/// Create Axum router for the MCP HTTP/SSE gateway with an optional shared KeyStore
+pub fn create_mcp_http_router_with_keystore(
+    router: Arc<McpRouter>,
+    config: ServerConfig,
+    explicit_keystore: Option<Arc<KeyStore>>,
+) -> Router {
     let cors = if config.allowed_origins.iter().any(|o| o == "*") {
         CorsLayer::new()
             .allow_origin(tower_http::cors::Any)
@@ -122,10 +131,12 @@ pub fn create_mcp_http_router(router: Arc<McpRouter>, config: ServerConfig) -> R
         .unwrap_or_else(default_log_file_path);
 
     let audit_logger = router.audit_logger().cloned();
-    let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
-        crate::config::default_data_dir().join("keys.json")
+    let keystore = explicit_keystore.or_else(|| {
+        let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
+            crate::config::default_data_dir().join("keys.json")
+        });
+        KeyStore::load_or_create(&keys_file).ok().map(Arc::new)
     });
-    let keystore = KeyStore::load_or_create(&keys_file).ok().map(Arc::new);
     let rate_limiter = Arc::new(AuthRateLimiter::default());
     let session_store = Arc::new(crate::session::SessionStore::default());
     let quota_tracker = Arc::new(crate::rate_limit::KeyQuotaTracker::default());
@@ -334,9 +345,14 @@ pub async fn auth_layer(
                 }
             }
             audit_auth_failure(&state, token_opt.as_deref(), peer);
+            let error_msg = if token_opt.is_some() {
+                "Unauthorized: Invalid or revoked authentication token"
+            } else {
+                "Unauthorized: Invalid or missing authentication token"
+            };
             return (
                 StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "Unauthorized: Invalid or missing authentication token" })),
+                Json(json!({ "error": error_msg })),
             )
                 .into_response();
         }

@@ -546,3 +546,116 @@ async fn test_g2_9_registration_failure_rate_limiting() {
         other => panic!("Expected failed RegisterAck, got {other:?}"),
     }
 }
+
+/// P0-23: KeyStore singleton shared between HTTP and WS:
+/// Dynamically issued device tokens via HTTP POST /api/keys immediately take effect on WS without restart.
+/// Dynamically revoked device tokens via HTTP DELETE /api/keys/:id immediately fail on WS without restart.
+#[tokio::test]
+async fn test_p0_23_shared_keystore_dynamic_issue_and_revoke_propagates_to_ws_without_restart() {
+    let dir = temp_data_dir("p0-23");
+    let keys_file = dir.join("keys.json");
+    let keystore = Arc::new(KeyStore::load_or_create(&keys_file).unwrap());
+
+    // 1. Issue an Admin key to authenticate HTTP calls
+    let (_, admin_token) = keystore
+        .issue(
+            "admin-root".to_string(),
+            KeyKind::SecretKey,
+            Some(Role::Admin),
+            vec!["*".to_string()],
+            None,
+            None,
+        )
+        .unwrap();
+
+    let registry = Arc::new(TerminalRegistry::new());
+    let router = Arc::new(McpRouter::new(registry.clone()));
+    let config = ServerConfig {
+        ws_path: "/ws".to_string(),
+        keys_file_path: Some(keys_file.clone()),
+        ..Default::default()
+    };
+
+    // Instantiate HTTP router with shared keystore
+    let http_router = at_pc_server::mcp::create_mcp_http_router_with_keystore(
+        router.clone(),
+        config.clone(),
+        Some(keystore.clone()),
+    );
+
+    // Instantiate WS state with the EXACT same shared keystore
+    let ws_state = WsServerState::new(registry.clone(), config.clone())
+        .with_keystore(keystore.clone());
+
+    // 2. Issue a device token via HTTP POST /api/keys
+    let issue_body = serde_json::json!({
+        "name": "dynamic-dev",
+        "kind": "dv",
+        "device_id": "PC-DYNAMIC-1"
+    });
+    let req = Request::builder()
+        .uri("/api/keys")
+        .method("POST")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))))
+        .body(Body::from(serde_json::to_vec(&issue_body).unwrap()))
+        .unwrap();
+
+    let resp = http_router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let issue_resp: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let issued_key_id = issue_resp["key"]["id"].as_str().unwrap().to_string();
+    let issued_raw_key = issue_resp["plaintext"].as_str().unwrap().to_string();
+
+    // 3. WITHOUT RESTARTING THE SERVER: Verify WS accepts registration with the dynamically issued token!
+    let mut client_ws = connect_ws_client(ws_state.clone(), None).await;
+    send_register_msg(
+        &mut client_ws,
+        "PC-DYNAMIC-1",
+        Some(issued_raw_key.clone()),
+    )
+    .await;
+
+    match receive_register_ack(&mut client_ws).await {
+        ServerToAgentMessage::RegisterAck { success, .. } => {
+            assert!(success, "WS registration with dynamically issued device token must immediately succeed without restart!");
+        }
+        other => panic!("Expected successful RegisterAck, got {other:?}"),
+    }
+
+    // 4. Revoke the device token via HTTP DELETE /api/keys/:id
+    let req = Request::builder()
+        .uri(&format!("/api/keys/{issued_key_id}"))
+        .method("DELETE")
+        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = http_router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // 5. WITHOUT RESTARTING THE SERVER: Verify WS rejects registration with the revoked token!
+    let mut client_ws2 = connect_ws_client(ws_state.clone(), None).await;
+    send_register_msg(
+        &mut client_ws2,
+        "PC-DYNAMIC-1",
+        Some(issued_raw_key),
+    )
+    .await;
+
+    match receive_register_ack(&mut client_ws2).await {
+        ServerToAgentMessage::RegisterAck { success, message, .. } => {
+            assert!(!success, "WS registration with revoked device token must immediately fail without restart!");
+            assert_eq!(
+                message.as_deref(),
+                Some("Invalid authentication token")
+            );
+        }
+        other => panic!("Expected rejected RegisterAck, got {other:?}"),
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}

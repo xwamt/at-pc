@@ -7,7 +7,6 @@ use tracing::{error, info};
 
 use crate::audit::AuditLogger;
 use crate::config::ServerConfig;
-use crate::mcp::create_mcp_http_router;
 use crate::meta_store::TerminalMetaStore;
 use crate::router::McpRouter;
 
@@ -142,13 +141,23 @@ pub async fn start_mcp_http_server_with_shutdown(
     config: ServerConfig,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    start_mcp_http_server_with_shutdown_and_keystore(router, config, None, shutdown).await
+}
+
+/// Start the MCP HTTP/SSE (or HTTPS) gateway with an optional shared KeyStore and stop it with graceful shutdown.
+pub async fn start_mcp_http_server_with_shutdown_and_keystore(
+    router: Arc<McpRouter>,
+    config: ServerConfig,
+    keystore: Option<Arc<crate::keystore::KeyStore>>,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let port = config.mcp_port;
     let host = config.listen_host.clone();
     let ip: std::net::IpAddr = host
         .parse()
         .unwrap_or_else(|_| std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
     let addr = std::net::SocketAddr::new(ip, port);
-    let app = create_mcp_http_router(router, config.clone());
+    let app = crate::mcp::create_mcp_http_router_with_keystore(router, config.clone(), keystore);
     let rustls_config = match (&config.tls_cert_path, &config.tls_key_path) {
         (Some(cert_path), Some(key_path)) => {
             crate::tls::ensure_crypto_provider();
