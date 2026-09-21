@@ -242,10 +242,22 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("============================================================");
         println!("Migrating legacy credentials into KeyStore ({})", keys_file.display());
         println!("============================================================");
+        let existing_names: std::collections::HashSet<String> = keystore
+            .list()
+            .into_iter()
+            .filter(|k| k.revoked_at.is_none())
+            .map(|k| k.name)
+            .collect();
+
         let mut count = 0;
         for (_token, role) in &config.roles {
+            let key_name = format!("migrated-{}", role.to_string().to_ascii_lowercase());
+            if existing_names.contains(&key_name) {
+                println!("Credential for role '{}' already migrated ({key_name}), skipping.", role);
+                continue;
+            }
             match keystore.issue(
-                format!("migrated-{}", role.to_string().to_ascii_lowercase()),
+                key_name,
                 at_pc_server::keystore::KeyKind::SecretKey,
                 Some(*role),
                 vec!["*".to_string()],
@@ -266,22 +278,27 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         if let Some(ref primary) = config.auth_token {
             if !primary.is_empty() {
-                match keystore.issue(
-                    "migrated-agent".to_string(),
-                    at_pc_server::keystore::KeyKind::DeviceToken,
-                    None,
-                    vec!["terminal".to_string()],
-                    None,
-                    None,
-                ) {
-                    Ok((rec, plaintext)) => {
-                        println!("Migrated legacy auth_token to Device Token:");
-                        println!("  ID        : {}", rec.id);
-                        println!("  Token     : {}", plaintext);
-                        count += 1;
-                    }
-                    Err(e) => {
-                        eprintln!("  Failed to migrate auth_token: {e}");
+                let key_name = "migrated-agent".to_string();
+                if existing_names.contains(&key_name) {
+                    println!("Legacy auth_token already migrated ({key_name}), skipping.");
+                } else {
+                    match keystore.issue(
+                        key_name,
+                        at_pc_server::keystore::KeyKind::DeviceToken,
+                        None,
+                        vec!["terminal".to_string()],
+                        None,
+                        None,
+                    ) {
+                        Ok((rec, plaintext)) => {
+                            println!("Migrated legacy auth_token to Device Token:");
+                            println!("  ID        : {}", rec.id);
+                            println!("  Token     : {}", plaintext);
+                            count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("  Failed to migrate auth_token: {e}");
+                        }
                     }
                 }
             }
@@ -306,13 +323,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match bootstrap::ensure_bootstrap_key(&data_dir) {
             Ok(bootstrap::BootstrapOutcome::Generated(ref key)) => {
                 bootstrap::print_bootstrap_banner(key);
-                config.auth_token = Some(key.clone());
             }
-            Ok(bootstrap::BootstrapOutcome::Existing(ref key)) => {
-                if !config.has_credentials() {
-                    config.auth_token = Some(key.clone());
-                }
-            }
+            Ok(bootstrap::BootstrapOutcome::Existing(_)) => {}
             Err(e) => {
                 error!("Failed to ensure bootstrap key: {e}");
             }
@@ -324,12 +336,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
     let keystore = at_pc_server::keystore::KeyStore::load_or_create(&keys_file).ok();
     let has_keystore_keys = keystore.as_ref().map(|k| k.has_active_keys()).unwrap_or(false);
-    let has_creds = config.has_credentials() || has_keystore_keys;
 
+    // Reject plaintext legacy credentials (both [roles] and auth_token) if KeyStore is active
     if let Err(e) = config::validate_legacy_config_gate(&config, has_keystore_keys) {
         eprintln!("{e}");
         std::process::exit(1);
     }
+
+    let has_creds = config.has_credentials() || has_keystore_keys;
 
     if let Err(e) = config::validate_boot_gate(
         &config,
@@ -472,7 +486,9 @@ async fn run_server_pipeline(
         .clone()
         .map(|p| Arc::new(at_pc_server::audit::AuditLogger::new(Some(p))));
 
-    if config.allow_plaintext && !at_pc_server::config::is_loopback(&config.listen_host) {
+    if (!at_pc_server::config::is_loopback(&config.listen_host))
+        && (config.allow_plaintext || config.insecure_no_auth)
+    {
         if let Some(ref al) = audit_logger {
             al.log(at_pc_server::audit::AuditRecord {
                 id: format!("audit-{}", at_pc_server::router::generate_call_id()),
@@ -485,7 +501,11 @@ async fn run_server_pipeline(
                 tool_name: None,
                 arguments: None,
                 status: "WARN".to_string(),
-                error: Some("Running on non-loopback without TLS (--allow-plaintext)".to_string()),
+                error: Some(if config.insecure_no_auth {
+                    "Running on non-loopback without authentication (--insecure-no-auth)".to_string()
+                } else {
+                    "Running on non-loopback without TLS (--allow-plaintext)".to_string()
+                }),
                 duration_ms: Some(0),
             });
         }

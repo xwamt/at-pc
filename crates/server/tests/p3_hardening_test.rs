@@ -419,8 +419,15 @@ fn test_g3_4_legacy_credentials_migration_and_gate() {
         Err(BootGateError::PlaintextRolesNotAllowed)
     );
 
-    // 4. Once plaintext roles are cleared from config, gate passes
+    // 4. Clearing roles while leaving auth_token MUST still be rejected (P1-12)
     config.roles.clear();
+    assert_eq!(
+        validate_legacy_config_gate(&config, true),
+        Err(BootGateError::PlaintextRolesNotAllowed)
+    );
+
+    // 5. Once both plaintext roles and auth_token are cleared, gate passes
+    config.auth_token = None;
     assert_eq!(validate_legacy_config_gate(&config, true), Ok(()));
 
     let _ = std::fs::remove_dir_all(&dir);

@@ -52,10 +52,7 @@ pub fn default_log_file_path() -> std::path::PathBuf {
     }
     match std::env::current_dir() {
         Ok(path) if path != std::path::Path::new("/") => path.join("at-pc-server.log"),
-        _ => std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|dir| dir.join("at-pc-server.log")))
-            .unwrap_or_else(|| crate::config::default_data_dir().join("at-pc-server.log")),
+        _ => crate::config::default_data_dir().join("at-pc-server.log"),
     }
 }
 
@@ -263,7 +260,7 @@ pub async fn auth_layer(
                 Err(AuthError::KeyNotFound) | Err(AuthError::InvalidFormat) => {
                     // Key not found in keystore or legacy token format; fallback to legacy credentials below
                 }
-                Err(e) => {
+                Err(_e) => {
                     // Other errors (expired, revoked, hash mismatch, invalid format): fail immediately
                     if let Some(addr) = peer {
                         let decision = match state.rate_limiter.check(addr.ip()) {
@@ -287,7 +284,7 @@ pub async fn auth_layer(
                     audit_auth_failure(&state, token_opt.as_deref(), peer);
                     return (
                         StatusCode::UNAUTHORIZED,
-                        Json(json!({ "error": format!("Unauthorized: {e:?}") })),
+                        Json(json!({ "error": "Unauthorized: Invalid or revoked authentication token" })),
                     ).into_response();
                 }
             }

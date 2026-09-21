@@ -4,6 +4,9 @@
 # 监听 IP 地址：默认为 "0.0.0.0" (允许局域网与远程访问)，如需仅本地回环请设为 "127.0.0.1"
 listen_host = "0.0.0.0"
 
+# 非回环监听 (如 0.0.0.0) 且未配置 TLS 证书时，必须显式允许明文传输（生产环境建议配置下方 TLS 证书）
+allow_plaintext = true
+
 # WebSocket 终端通信端口与路径
 ws_port = 9801
 ws_path = "/ws"
@@ -30,9 +33,11 @@ meta_store_path = "terminals_meta.json"
 # 操作审计日志落盘路径 (不可篡改 JSONL 格式流水)
 audit_log_path = "audit.jsonl"
 
-# 基于角色的访问控制 (RBAC) Token 映射
+# [legacy] 基于角色的访问控制 (RBAC) 明文 Token 映射（已弃用）
+# 注意：KeyStore 激活后，配置文件中包含明文 [roles] 将被拒绝启动。
+# 请使用 --migrate-legacy-credentials 命令迁移至 KeyStore 管理。
 # 支持三种角色级别：viewer (只读诊断), operator (运维排障), admin (完全控制/命令执行/具身操作)
-[roles]
+# [roles]
 # "viewer-token-123" = "viewer"
 # "operator-token-456" = "operator"
 # "admin-token-789" = "admin"

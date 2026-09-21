@@ -965,18 +965,9 @@ async fn api_auth_login(
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Response {
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
-        })
-        .or_else(|| connect_info.map(|ci| ci.0.ip()))
+    // Only trust ConnectInfo (TCP peer) to prevent XFF rate limit bypass (P2-4)
+    let client_ip = connect_info
+        .map(|ci| ci.0.ip())
         .unwrap_or_else(|| std::net::IpAddr::from([127, 0, 0, 1]));
 
     match state.rate_limiter.check(client_ip) {
@@ -1041,10 +1032,42 @@ async fn api_auth_login(
     let (principal, role) = match verified {
         Some((p, r)) => {
             state.rate_limiter.record_success(client_ip);
+            if let Some(ref al) = state.audit_logger {
+                al.log(crate::audit::AuditRecord {
+                    id: format!("audit-{}", crate::router::generate_call_id()),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    role: Some(r.to_string()),
+                    token_prefix: Some(crate::audit::AuditLogger::redact_token(&body.key)),
+                    client_ip: Some(client_ip.to_string()),
+                    terminal_id: None,
+                    action: "auth:login".to_string(),
+                    tool_name: None,
+                    arguments: None,
+                    status: "OK".to_string(),
+                    error: None,
+                    duration_ms: Some(0),
+                });
+            }
             (p, r)
         }
         None => {
             state.rate_limiter.record_failure(client_ip);
+            if let Some(ref al) = state.audit_logger {
+                al.log(crate::audit::AuditRecord {
+                    id: format!("audit-{}", crate::router::generate_call_id()),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    role: None,
+                    token_prefix: Some(crate::audit::AuditLogger::redact_token(&body.key)),
+                    client_ip: Some(client_ip.to_string()),
+                    terminal_id: None,
+                    action: crate::audit::ACTION_AUTH_FAILED.to_string(),
+                    tool_name: None,
+                    arguments: None,
+                    status: "FAILED".to_string(),
+                    error: Some("Invalid API key submitted to /api/auth/login".to_string()),
+                    duration_ms: Some(0),
+                });
+            }
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "error": "Invalid API key" })),
@@ -1077,6 +1100,7 @@ async fn api_auth_login(
 /// Handler for `POST /api/auth/logout`
 async fn api_auth_logout(
     State(state): State<McpHttpState>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(cookie_header) = headers
@@ -1093,6 +1117,23 @@ async fn api_auth_logout(
                 }
             }
         }
+    }
+
+    if let Some(ref al) = state.audit_logger {
+        al.log(crate::audit::AuditRecord {
+            id: format!("audit-{}", crate::router::generate_call_id()),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            role: None,
+            token_prefix: None,
+            client_ip: connect_info.map(|ci| ci.0.ip().to_string()),
+            terminal_id: None,
+            action: "auth:logout".to_string(),
+            tool_name: None,
+            arguments: None,
+            status: "OK".to_string(),
+            error: None,
+            duration_ms: Some(0),
+        });
     }
 
     (

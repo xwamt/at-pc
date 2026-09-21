@@ -276,7 +276,7 @@ impl KeyStore {
     ///
     /// If the file does not exist, checks if `<data_dir>/bootstrap_key.txt` exists.
     /// If so, migrates the bootstrap key into an Admin record named `bootstrap-root`,
-    /// writes `keys.json` with 0600 permissions, and deletes `bootstrap_key.txt`.
+    /// writes `keys.json` with 0600 permissions, and retains `bootstrap_key.txt` (0600) for operator manual removal.
     pub fn load_or_create(path: &Path) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {

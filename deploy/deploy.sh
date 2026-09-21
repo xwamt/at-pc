@@ -111,6 +111,7 @@ deploy_standalone() {
         --meta-file /var/lib/at-pc/terminals_meta.json \
         --audit-file /var/log/at-pc/audit.jsonl \
         --log-file /var/log/at-pc/at-pc-server.log \
+        --allow-plaintext \
         > /dev/null 2>&1 &
 
     echo ">> Server started in background (PID: $!)."

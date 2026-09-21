@@ -468,9 +468,18 @@ check_g0_4() {
         --mcp-port "$MCP_PORT" \
         --ws-port "$WS_PORT" \
         --audit-file "$SHARED_DIR/audit.jsonl" \
+        --allow-plaintext \
         >"$SHARED_DIR/stdout.log" 2>&1 &
     local pid=$!
     PIDS_TO_KILL+=("$pid")
+
+    if ! wait_for_http "http://127.0.0.1:$MCP_PORT/health" "200" "" 10; then
+        echo "" >&2
+        echo "       FAIL: Server did not start cleanly on first boot" >&2
+        cat "$SHARED_DIR/stdout.log" >&2
+        stop_server "$pid"
+        return 1
+    fi
 
     local key_file="$SHARED_DIR/bootstrap_key.txt"
     local found=0
@@ -544,6 +553,7 @@ check_g0_4() {
         --mcp-port "$MCP_PORT" \
         --ws-port "$WS_PORT" \
         --audit-file "$SHARED_DIR/audit.jsonl" \
+        --allow-plaintext \
         >"$SHARED_DIR/stdout_restart.log" 2>&1 &
     local restart_pid=$!
     PIDS_TO_KILL+=("$restart_pid")

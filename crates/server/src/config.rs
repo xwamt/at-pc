@@ -79,6 +79,30 @@ pub fn is_tool_allowed_for_role(role: Role, tool_name: &str) -> bool {
     role >= required_role
 }
 
+fn default_ws_port() -> u16 {
+    9801
+}
+
+fn default_ws_path() -> String {
+    "/ws".to_string()
+}
+
+fn default_mcp_port() -> u16 {
+    9800
+}
+
+fn default_heartbeat_interval_secs() -> u64 {
+    5
+}
+
+fn default_offline_threshold_secs() -> u64 {
+    15
+}
+
+fn default_sweep_interval_secs() -> u64 {
+    5
+}
+
 /// Configuration for the centralized at-pc server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -86,21 +110,28 @@ pub struct ServerConfig {
     #[serde(default = "default_listen_host")]
     pub listen_host: String,
     /// Port for WebSocket server (default: 9801)
+    #[serde(default = "default_ws_port")]
     pub ws_port: u16,
     /// Path for WebSocket endpoint (default: "/ws")
+    #[serde(default = "default_ws_path")]
     pub ws_path: String,
     /// Port for MCP HTTP/SSE server (default: 9800)
+    #[serde(default = "default_mcp_port")]
     pub mcp_port: u16,
     /// Optional authentication token required for agents to register
+    #[serde(default)]
     pub auth_token: Option<String>,
     /// Optional list of allowed origins for CORS. If empty, cross-origin requests are blocked.
     #[serde(default)]
     pub allowed_origins: Vec<String>,
     /// Heartbeat expected interval in seconds (default: 5)
+    #[serde(default = "default_heartbeat_interval_secs")]
     pub heartbeat_interval_secs: u64,
     /// Threshold in seconds before a terminal without heartbeat is marked offline (default: 15)
+    #[serde(default = "default_offline_threshold_secs")]
     pub offline_threshold_secs: u64,
     /// Offline sweep interval in seconds (default: 5)
+    #[serde(default = "default_sweep_interval_secs")]
     pub sweep_interval_secs: u64,
     /// Path for persistent terminal metadata store file (default: "terminals_meta.json")
     #[serde(default)]
@@ -134,7 +165,7 @@ pub struct ServerConfig {
     #[serde(default)]
     pub insecure_no_auth: bool,
     /// Allow non-TLS plaintext transport on non-loopback listeners (`--allow-plaintext`).
-    /// Placeholder for the M3 hardening gate; read but not yet enforced in M0.
+    /// Enforced in M3: non-loopback without TLS will fail startup unless this is true.
     #[serde(default)]
     pub allow_plaintext: bool,
 }
@@ -275,10 +306,10 @@ impl std::fmt::Display for BootGateError {
             ),
             BootGateError::PlaintextRolesNotAllowed => write!(
                 f,
-                "refusing to start: plaintext [roles] found in configuration while KeyStore is active.\n\
+                "refusing to start: plaintext [roles] or auth_token found in configuration while KeyStore is active.\n\
                  Solutions:\n\
-                 \x20 1. Run with --migrate-legacy-credentials to migrate existing [roles]\n\
-                 \x20 2. Remove [roles] section from your server configuration file"
+                 \x20 1. Run with --migrate-legacy-credentials to migrate existing credentials\n\
+                 \x20 2. Remove [roles] section and auth_token from your server configuration file"
             ),
         }
     }
@@ -295,7 +326,11 @@ pub fn validate_boot_gate(
     if is_loopback(&cfg.listen_host) {
         return Ok(());
     }
-    if !has_creds && !insecure_no_auth {
+    // --insecure-no-auth provides total unauthenticated rollback / dev mode
+    if insecure_no_auth {
+        return Ok(());
+    }
+    if !has_creds {
         return Err(BootGateError::MissingCredentials {
             host: cfg.listen_host.clone(),
         });
@@ -308,13 +343,20 @@ pub fn validate_boot_gate(
     Ok(())
 }
 
-/// Legacy config migration gate: reject plaintext [roles] once KeyStore has active keys.
+/// Legacy config migration gate: reject plaintext [roles] or auth_token once KeyStore has active keys.
 pub fn validate_legacy_config_gate(
     cfg: &ServerConfig,
     has_active_keys: bool,
 ) -> Result<(), BootGateError> {
-    if has_active_keys && !cfg.roles.is_empty() {
-        return Err(BootGateError::PlaintextRolesNotAllowed);
+    if has_active_keys {
+        if !cfg.roles.is_empty() {
+            return Err(BootGateError::PlaintextRolesNotAllowed);
+        }
+        if let Some(ref tok) = cfg.auth_token {
+            if !tok.is_empty() {
+                return Err(BootGateError::PlaintextRolesNotAllowed);
+            }
+        }
     }
     Ok(())
 }

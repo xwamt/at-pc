@@ -24,7 +24,7 @@ services:
     environment:
       - RUST_LOG=info
       - AT_PC_DATA_DIR=/var/lib/at-pc
-      - AT_PC_LOG_DIR=/var/log/at-pc
+      - AT_PC_LOG_FILE=/var/log/at-pc/at-pc-server.log
 
 volumes:
   at-pc-data:
