@@ -311,7 +311,9 @@ impl DesktopStreamController {
 
         tokio::spawn(async move {
             #[cfg(windows)]
-            let gdi_capturer = Arc::new(std::sync::Mutex::new(crate::capture::windows::GdiScreenCapturer::new().ok()));
+            let gdi_capturer = Arc::new(std::sync::Mutex::new(
+                crate::capture::windows::GdiScreenCapturer::new().ok(),
+            ));
 
             let mut cached_monitor = find_monitor(display_index).map(SendMonitor);
             let mut state = StreamSendState {

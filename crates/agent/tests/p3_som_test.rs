@@ -777,7 +777,11 @@ async fn test_som_window_title_auto_cropping() {
         display_index: Some(0),
     }]));
 
-    let canvas = DynamicImage::ImageRgba8(RgbaImage::from_pixel(1920, 1080, Rgba([255, 255, 255, 255])));
+    let canvas = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+        1920,
+        1080,
+        Rgba([255, 255, 255, 255]),
+    ));
 
     let res = generate_marked_screen_from_image_ext(
         canvas,
@@ -794,11 +798,16 @@ async fn test_som_window_title_auto_cropping() {
     )
     .expect("generate_marked_screen_from_image_ext should succeed");
 
-    assert_eq!(res.width, 800, "Width should be auto-cropped to window bounds");
-    assert_eq!(res.height, 600, "Height should be auto-cropped to window bounds");
+    assert_eq!(
+        res.width, 800,
+        "Width should be auto-cropped to window bounds"
+    );
+    assert_eq!(
+        res.height, 600,
+        "Height should be auto-cropped to window bounds"
+    );
     assert_eq!(res.original_width, Some(1920));
     assert_eq!(res.original_height, Some(1080));
 
     reset_window_mocks();
 }
-

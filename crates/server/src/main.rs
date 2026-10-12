@@ -222,16 +222,19 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     if raw_args.iter().any(|a| a == "--allow-plaintext")
-        || std::env::var("AT_PC_ALLOW_PLAINTEXT").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+        || std::env::var("AT_PC_ALLOW_PLAINTEXT")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
     {
         config.allow_plaintext = true;
     }
 
     let migrate_legacy = raw_args.iter().any(|a| a == "--migrate-legacy-credentials");
     if migrate_legacy {
-        let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
-            config::default_data_dir().join("keys.json")
-        });
+        let keys_file = config
+            .keys_file_path
+            .clone()
+            .unwrap_or_else(|| config::default_data_dir().join("keys.json"));
         let keystore = match at_pc_server::keystore::KeyStore::load_or_create(&keys_file) {
             Ok(ks) => ks,
             Err(e) => {
@@ -240,7 +243,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         };
         println!("============================================================");
-        println!("Migrating legacy credentials into KeyStore ({})", keys_file.display());
+        println!(
+            "Migrating legacy credentials into KeyStore ({})",
+            keys_file.display()
+        );
         println!("============================================================");
         let existing_names: std::collections::HashSet<String> = keystore
             .list()
@@ -250,10 +256,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .collect();
 
         let mut count = 0;
-        for (_token, role) in &config.roles {
+        for role in config.roles.values() {
             let key_name = format!("migrated-{}", role.to_string().to_ascii_lowercase());
             if existing_names.contains(&key_name) {
-                println!("Credential for role '{}' already migrated ({key_name}), skipping.", role);
+                println!(
+                    "Credential for role '{}' already migrated ({key_name}), skipping.",
+                    role
+                );
                 continue;
             }
             match keystore.issue(
@@ -318,9 +327,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     config.bootstrap_disabled = args.no_bootstrap;
     config.insecure_no_auth = args.insecure_no_auth;
 
-    let keys_file = config.keys_file_path.clone().unwrap_or_else(|| {
-        config::default_data_dir().join("keys.json")
-    });
+    let keys_file = config
+        .keys_file_path
+        .clone()
+        .unwrap_or_else(|| config::default_data_dir().join("keys.json"));
 
     // The bootstrap key file has to live exactly where `KeyStore::load_or_create` looks for
     // it — beside the keys file. Writing it to the default data dir while `--keys-file` points
@@ -336,7 +346,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let file = bootstrap::bootstrap_key_path(&bootstrap_dir);
                 bootstrap::print_bootstrap_banner_with_file(key, &file);
             }
-            Ok(bootstrap::BootstrapOutcome::Existing(_)) | Ok(bootstrap::BootstrapOutcome::Skipped) => {}
+            Ok(bootstrap::BootstrapOutcome::Existing(_))
+            | Ok(bootstrap::BootstrapOutcome::Skipped) => {}
             Err(e) => {
                 // Fatal: a key store that exists but cannot be used must never be papered over.
                 // Continuing would boot with the API gate effectively unconfigured, which looks
@@ -365,7 +376,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             std::process::exit(1);
         }
     };
-    let has_keystore_keys = keystore.as_ref().map(|k| k.has_active_keys()).unwrap_or(false);
+    let has_keystore_keys = keystore
+        .as_ref()
+        .map(|k| k.has_active_keys())
+        .unwrap_or(false);
 
     // Reject plaintext legacy credentials (both [roles] and auth_token) if KeyStore is active
     if let Err(e) = config::validate_legacy_config_gate(&config, has_keystore_keys) {
@@ -375,11 +389,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let has_creds = config.has_credentials() || has_keystore_keys;
 
-    if let Err(e) = config::validate_boot_gate(
-        &config,
-        has_creds,
-        config.insecure_no_auth,
-    ) {
+    if let Err(e) = config::validate_boot_gate(&config, has_creds, config.insecure_no_auth) {
         eprintln!("{e}");
         std::process::exit(1);
     }
@@ -450,23 +460,31 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         error!(
                             "Failed to initialize server tray ({e}); falling back to console mode"
                         );
-                        rt.block_on(run_server_pipeline(config, keystore, stdio_mode, None, None))
+                        rt.block_on(run_server_pipeline(
+                            config, keystore, stdio_mode, None, None,
+                        ))
                     }
                 }
             }
             Err(e) => {
                 error!("Failed to create event loop for tray ({e}); falling back to console mode");
-                rt.block_on(run_server_pipeline(config, keystore, stdio_mode, None, None))
+                rt.block_on(run_server_pipeline(
+                    config, keystore, stdio_mode, None, None,
+                ))
             }
         }
     } else {
-        rt.block_on(run_server_pipeline(config, keystore, stdio_mode, None, None))
+        rt.block_on(run_server_pipeline(
+            config, keystore, stdio_mode, None, None,
+        ))
     }
 
     #[cfg(not(feature = "tray"))]
     {
         let _ = enable_tray;
-        rt.block_on(run_server_pipeline(config, keystore, stdio_mode, None, None))
+        rt.block_on(run_server_pipeline(
+            config, keystore, stdio_mode, None, None,
+        ))
     }
 }
 
@@ -535,7 +553,8 @@ async fn run_server_pipeline(
                 arguments: None,
                 status: "WARN".to_string(),
                 error: Some(if config.insecure_no_auth {
-                    "Running on non-loopback without authentication (--insecure-no-auth)".to_string()
+                    "Running on non-loopback without authentication (--insecure-no-auth)"
+                        .to_string()
                 } else {
                     "Running on non-loopback without TLS (--allow-plaintext)".to_string()
                 }),
@@ -558,7 +577,11 @@ async fn run_server_pipeline(
     // 4. Start WebSocket Gateway in background
     let rate_limiter = Arc::new(AuthRateLimiter::default());
 
-    let mut ws_state = WsServerState::with_handler(registry.clone(), config.clone(), router.clone());
+    let mut ws_state =
+        WsServerState::with_handler(registry.clone(), config.clone(), router.clone());
+    if let Some(ref logger) = audit_logger {
+        ws_state = ws_state.with_audit_logger(logger.clone());
+    }
     ws_state.keystore = keystore.clone();
     ws_state.rate_limiter = rate_limiter.clone();
     let ws_port = config.ws_port;
@@ -587,14 +610,13 @@ async fn run_server_pipeline(
         let http_config = config.clone();
         let http_keystore = keystore.clone();
         background_http = Some(tokio::spawn(async move {
-            if let Err(e) =
-                start_mcp_http_server_with_shutdown_and_keystore(
-                    http_router,
-                    http_config,
-                    http_keystore,
-                    shutdown_signal(),
-                )
-                .await
+            if let Err(e) = start_mcp_http_server_with_shutdown_and_keystore(
+                http_router,
+                http_config,
+                http_keystore,
+                shutdown_signal(),
+            )
+            .await
             {
                 error!("MCP HTTP/Web gateway error in stdio mode: {}", e);
             }

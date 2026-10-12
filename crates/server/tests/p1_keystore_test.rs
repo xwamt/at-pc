@@ -267,17 +267,11 @@ fn test_keystore_issue_and_verify() {
 
     // Verify with tampered secret -> HashMismatch
     let tampered_key = format!("{}x", &admin_key[..admin_key.len() - 1]);
-    assert_eq!(
-        keystore.verify(&tampered_key),
-        Err(AuthError::HashMismatch)
-    );
+    assert_eq!(keystore.verify(&tampered_key), Err(AuthError::HashMismatch));
 
     // Non-existent key -> KeyNotFound
     let non_existent = "atpc_sk_00000000_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq";
-    assert_eq!(
-        keystore.verify(non_existent),
-        Err(AuthError::KeyNotFound)
-    );
+    assert_eq!(keystore.verify(non_existent), Err(AuthError::KeyNotFound));
 
     // Wrong kind: verify with dv prefix against sk key -> WrongKind
     let dv_mismatch = format!("atpc_dv_{}", &admin_key[8..]);
@@ -413,7 +407,10 @@ fn test_guard_against_revoking_last_admin_key() {
 
     // Attempting to delete the ONLY active admin key must fail
     let del_err = keystore.delete(&admin1.id);
-    assert!(del_err.is_err(), "deleting last active admin must return error");
+    assert!(
+        del_err.is_err(),
+        "deleting last active admin must return error"
+    );
 
     // Issue second Admin key
     let (admin2, admin2_key) = keystore

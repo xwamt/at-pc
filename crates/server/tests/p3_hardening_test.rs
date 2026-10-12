@@ -153,7 +153,10 @@ fn test_g3_1_tls_gate_and_allow_plaintext_override() {
     // 5. Insecure mode audit logging
     let dir = std::env::temp_dir().join(format!(
         "atpc-g3-audit-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let audit_file = dir.join("audit.jsonl");
@@ -207,7 +210,12 @@ async fn test_g3_2_session_cookie_login_and_revocation() {
         .method(Method::POST)
         .uri("/api/auth/login")
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(serde_json::to_vec(&json!({ "key": "atpc_sk_badkey_1234567890123456789012345678901234567890123" })).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(
+                &json!({ "key": "atpc_sk_badkey_1234567890123456789012345678901234567890123" }),
+            )
+            .unwrap(),
+        ))
         .unwrap();
     req.extensions_mut().insert(ConnectInfo(peer));
     let resp = ctx.app.clone().oneshot(req).await.unwrap();
@@ -219,7 +227,9 @@ async fn test_g3_2_session_cookie_login_and_revocation() {
         .method(Method::POST)
         .uri("/api/auth/login")
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(serde_json::to_vec(&json!({ "key": ctx.admin_key })).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(&json!({ "key": ctx.admin_key })).unwrap(),
+        ))
         .unwrap();
     req.extensions_mut().insert(ConnectInfo(peer));
     let resp = ctx.app.clone().oneshot(req).await.unwrap();
@@ -298,11 +308,15 @@ async fn test_g3_3_quota_and_ratelimit_headers() {
     let resp = ctx.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
-        resp.headers().get("x-ratelimit-limit").and_then(|v| v.to_str().ok()),
+        resp.headers()
+            .get("x-ratelimit-limit")
+            .and_then(|v| v.to_str().ok()),
         Some("3")
     );
     assert_eq!(
-        resp.headers().get("x-ratelimit-remaining").and_then(|v| v.to_str().ok()),
+        resp.headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok()),
         Some("2")
     );
     assert!(resp.headers().contains_key("x-ratelimit-reset"));
@@ -318,7 +332,9 @@ async fn test_g3_3_quota_and_ratelimit_headers() {
     let resp = ctx.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
-        resp.headers().get("x-ratelimit-remaining").and_then(|v| v.to_str().ok()),
+        resp.headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok()),
         Some("1")
     );
 
@@ -333,7 +349,9 @@ async fn test_g3_3_quota_and_ratelimit_headers() {
     let resp = ctx.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
-        resp.headers().get("x-ratelimit-remaining").and_then(|v| v.to_str().ok()),
+        resp.headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok()),
         Some("0")
     );
 
@@ -349,12 +367,17 @@ async fn test_g3_3_quota_and_ratelimit_headers() {
     assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     assert!(resp.headers().contains_key(header::RETRY_AFTER));
     assert_eq!(
-        resp.headers().get("x-ratelimit-remaining").and_then(|v| v.to_str().ok()),
+        resp.headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok()),
         Some("0")
     );
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(body["error"].as_str().unwrap().contains("Request quota exceeded"));
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("Request quota exceeded"));
 }
 
 #[tokio::test]
@@ -391,14 +414,21 @@ async fn test_desktop_ticket_and_ws_auth() {
 fn test_g3_4_legacy_credentials_migration_and_gate() {
     let dir = std::env::temp_dir().join(format!(
         "atpc-g3-migrate-{}",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let keys_path = dir.join("keys.json");
 
     let mut config = ServerConfig::default();
-    config.roles.insert("legacy-secret-admin".to_string(), Role::Admin);
-    config.roles.insert("legacy-secret-viewer".to_string(), Role::Viewer);
+    config
+        .roles
+        .insert("legacy-secret-admin".to_string(), Role::Admin);
+    config
+        .roles
+        .insert("legacy-secret-viewer".to_string(), Role::Viewer);
     config.auth_token = Some("legacy-device-token".to_string());
 
     // 1. Initial keystore has no keys -> validate_legacy_config_gate succeeds
@@ -407,7 +437,7 @@ fn test_g3_4_legacy_credentials_migration_and_gate() {
     // 2. Perform migration into KeyStore
     let keystore = KeyStore::load_or_create(&keys_path).unwrap();
     let mut migrated_count = 0;
-    for (_token, role) in &config.roles {
+    for role in config.roles.values() {
         let (rec, plaintext) = keystore
             .issue(
                 format!("migrated-{}", role.to_string().to_ascii_lowercase()),

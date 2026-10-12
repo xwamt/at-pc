@@ -529,7 +529,11 @@ async fn test_g1_4_rate_limiting_http_gate() {
         rate_test_ip,
     )
     .await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "10th attempt must be 429");
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "10th attempt must be 429"
+    );
     assert!(
         headers.contains_key(header::RETRY_AFTER),
         "429 must include Retry-After header"
@@ -557,7 +561,11 @@ async fn test_g1_4_rate_limiting_http_gate() {
         rate_test_ip,
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "failure after reset must return 401");
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "failure after reset must return 401"
+    );
 }
 
 #[tokio::test]
@@ -609,7 +617,9 @@ async fn test_m3_session_login_logout_and_quota() {
         .method(Method::POST)
         .uri("/api/auth/login")
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(serde_json::to_vec(&json!({ "key": "invalid_key" })).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(&json!({ "key": "invalid_key" })).unwrap(),
+        ))
         .unwrap();
     req.extensions_mut().insert(ConnectInfo(peer));
     let resp = ctx.app.clone().oneshot(req).await.unwrap();
@@ -620,7 +630,9 @@ async fn test_m3_session_login_logout_and_quota() {
         .method(Method::POST)
         .uri("/api/auth/login")
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(serde_json::to_vec(&json!({ "key": ctx.admin_key })).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(&json!({ "key": ctx.admin_key })).unwrap(),
+        ))
         .unwrap();
     req.extensions_mut().insert(ConnectInfo(peer));
     let resp = ctx.app.clone().oneshot(req).await.unwrap();

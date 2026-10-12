@@ -2,6 +2,7 @@ pub mod audit;
 pub mod bootstrap;
 pub mod config;
 pub mod desktop_ticket;
+pub mod enrollment_store;
 pub mod keystore;
 pub mod mcp;
 pub mod meta_store;
@@ -24,6 +25,9 @@ pub use config::{
     is_loopback, is_tool_allowed_for_role, validate_boot_gate, BootGateError, Role, ServerConfig,
 };
 pub use desktop_ticket::{DesktopTicket, DesktopTicketStore, TicketError};
+pub use enrollment_store::{
+    DeviceEnrollmentStore, EnrollmentChallenge, EnrollmentStoreError, EnrollmentUpsert,
+};
 pub use keystore::{
     compute_hash, constant_time_compare, parse_credential, AuthError, KeyKind, KeyRecord, KeyStore,
     KeySummary, Principal,

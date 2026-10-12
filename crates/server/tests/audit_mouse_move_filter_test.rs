@@ -314,3 +314,57 @@ async fn test_failed_mouse_move_is_not_audited_but_failed_click_is_audited() {
     assert_eq!(records[0].status, "FAILED");
     assert_eq!(records[0].action, "api:desktop_input");
 }
+
+#[tokio::test]
+async fn test_denied_mouse_move_is_audited_before_high_frequency_filtering() {
+    let guard = unique_audit_path();
+    let audit_path = guard.0.clone();
+
+    let mut roles = HashMap::new();
+    roles.insert("viewer-token".to_string(), Role::Viewer);
+    let config = ServerConfig {
+        roles,
+        audit_log_path: Some(audit_path.clone()),
+        ..Default::default()
+    };
+
+    let logger = Arc::new(AuditLogger::new(Some(audit_path)));
+    let registry = Arc::new(TerminalRegistry::new());
+    let router = Arc::new(McpRouter::new(registry).with_audit_logger(Arc::clone(&logger)));
+    let app = create_mcp_http_router(router, config);
+
+    let event = DesktopInputEvent::MouseMove { x: 100, y: 200 };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/terminals/term-denied/desktop/input")
+        .header("Authorization", "Bearer viewer-token")
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_string(&event).unwrap()))
+        .unwrap();
+
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    logger.flush_async().await.unwrap();
+    let records = logger.read_recent_async(10).await;
+    assert_eq!(
+        records.len(),
+        1,
+        "denied input must produce exactly one audit record"
+    );
+
+    let record = &records[0];
+    assert_eq!(record.action, "api:desktop_input");
+    assert_eq!(record.status, "DENIED");
+    assert_eq!(record.role.as_deref(), Some("viewer"));
+    assert_eq!(record.token_prefix.as_deref(), Some("vie***"));
+    assert_eq!(record.terminal_id.as_deref(), Some("term-denied"));
+    assert_eq!(
+        record
+            .arguments
+            .as_ref()
+            .and_then(|value| value.get("action"))
+            .and_then(serde_json::Value::as_str),
+        Some("MouseMove")
+    );
+}

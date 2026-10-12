@@ -243,10 +243,14 @@ pub async fn auth_layer(
 
     // 1. Rate limiter pre-check on peer IP (block banned IPs)
     if let Some(addr) = peer {
-        if let RateLimitDecision::Banned { retry_after_secs } = state.rate_limiter.check(addr.ip()) {
+        if let RateLimitDecision::Banned { retry_after_secs } = state.rate_limiter.check(addr.ip())
+        {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
-                [(axum::http::header::RETRY_AFTER, retry_after_secs.to_string())],
+                [(
+                    axum::http::header::RETRY_AFTER,
+                    retry_after_secs.to_string(),
+                )],
                 Json(json!({ "error": "Too Many Requests: IP address is temporarily banned" })),
             )
                 .into_response();
@@ -269,70 +273,82 @@ pub async fn auth_layer(
 
         if resolved_role.is_none() {
             if let Some(ref ks) = state.keystore {
-            match ks.verify(token) {
-                Ok(principal) => {
-                    // Check kind: dv token cannot be used for client HTTP/dashboard
-                    if principal.kind == KeyKind::DeviceToken {
-                        return (
+                match ks.verify(token) {
+                    Ok(principal) => {
+                        // Check kind: dv token cannot be used for client HTTP/dashboard
+                        if principal.kind == KeyKind::DeviceToken {
+                            return (
                             StatusCode::FORBIDDEN,
                             Json(json!({ "error": "Forbidden: Device token cannot be used for client API or console" })),
                         ).into_response();
-                    }
-                    // Check scopes: must have mcp or console (or wildcard *)
-                    if !(principal.has_scope("mcp") || principal.has_scope("console") || principal.has_scope("*")) {
-                        return (
-                            StatusCode::FORBIDDEN,
-                            Json(json!({ "error": "Forbidden: Key lacks required scope" })),
-                        ).into_response();
-                    }
-                    resolved_role = principal.role;
-                    principal_opt = Some(principal);
-                }
-                Err(AuthError::KeyNotFound) | Err(AuthError::InvalidFormat) => {
-                    // Key not found in keystore or legacy token format; fallback to legacy credentials below
-                }
-                Err(_e) => {
-                    // Other errors (expired, revoked, hash mismatch, invalid format): fail immediately
-                    if let Some(addr) = peer {
-                        let decision = match state.rate_limiter.check(addr.ip()) {
-                            RateLimitDecision::RateLimited { retry_after_secs }
-                            | RateLimitDecision::Banned { retry_after_secs } => {
-                                RateLimitDecision::RateLimited { retry_after_secs }
-                            }
-                            RateLimitDecision::Allowed => state.rate_limiter.record_failure(addr.ip()),
-                        };
-                        if let RateLimitDecision::RateLimited { retry_after_secs }
-                        | RateLimitDecision::Banned { retry_after_secs } = decision
+                        }
+                        // Check scopes: must have mcp or console (or wildcard *)
+                        if !(principal.has_scope("mcp")
+                            || principal.has_scope("console")
+                            || principal.has_scope("*"))
                         {
-                            audit_auth_failure(&state, token_opt.as_deref(), peer);
                             return (
+                                StatusCode::FORBIDDEN,
+                                Json(json!({ "error": "Forbidden: Key lacks required scope" })),
+                            )
+                                .into_response();
+                        }
+                        resolved_role = principal.role;
+                        principal_opt = Some(principal);
+                    }
+                    Err(AuthError::KeyNotFound) | Err(AuthError::InvalidFormat) => {
+                        // Key not found in keystore or legacy token format; fallback to legacy credentials below
+                    }
+                    Err(_e) => {
+                        // Other errors (expired, revoked, hash mismatch, invalid format): fail immediately
+                        if let Some(addr) = peer {
+                            let decision = match state.rate_limiter.check(addr.ip()) {
+                                RateLimitDecision::RateLimited { retry_after_secs }
+                                | RateLimitDecision::Banned { retry_after_secs } => {
+                                    RateLimitDecision::RateLimited { retry_after_secs }
+                                }
+                                RateLimitDecision::Allowed => {
+                                    state.rate_limiter.record_failure(addr.ip())
+                                }
+                            };
+                            if let RateLimitDecision::RateLimited { retry_after_secs }
+                            | RateLimitDecision::Banned { retry_after_secs } = decision
+                            {
+                                audit_auth_failure(&state, token_opt.as_deref(), peer);
+                                return (
                                 StatusCode::TOO_MANY_REQUESTS,
                                 [(axum::http::header::RETRY_AFTER, retry_after_secs.to_string())],
                                 Json(json!({ "error": "Too Many Requests: Rate limit exceeded" })),
                             ).into_response();
+                            }
                         }
-                    }
-                    audit_auth_failure(&state, token_opt.as_deref(), peer);
-                    return (
+                        audit_auth_failure(&state, token_opt.as_deref(), peer);
+                        return (
                         StatusCode::UNAUTHORIZED,
                         Json(json!({ "error": "Unauthorized: Invalid or revoked authentication token" })),
                     ).into_response();
+                    }
+                }
+            }
+
+            if resolved_role.is_none() && state.config.has_credentials() {
+                if let Some(role) = state.config.get_role_for_token(token) {
+                    resolved_role = Some(role);
                 }
             }
         }
-
-        if resolved_role.is_none() && state.config.has_credentials() {
-            if let Some(role) = state.config.get_role_for_token(token) {
-                resolved_role = Some(role);
-            }
-        }
     }
-}
 
     if resolved_role.is_none() {
-        if state.config.insecure_no_auth {
-            resolved_role = Some(crate::config::Role::Admin);
-        } else if peer_loopback && !state.config.has_credentials() && state.keystore.as_ref().map(|k| !k.has_active_keys()).unwrap_or(false) {
+        let allow_local_admin = state.config.insecure_no_auth
+            || (peer_loopback
+                && !state.config.has_credentials()
+                && state
+                    .keystore
+                    .as_ref()
+                    .map(|k| !k.has_active_keys())
+                    .unwrap_or(false));
+        if allow_local_admin {
             resolved_role = Some(crate::config::Role::Admin);
         }
     }
@@ -365,9 +381,13 @@ pub async fn auth_layer(
                     audit_auth_failure(&state, token_opt.as_deref(), peer);
                     return (
                         StatusCode::TOO_MANY_REQUESTS,
-                        [(axum::http::header::RETRY_AFTER, retry_after_secs.to_string())],
+                        [(
+                            axum::http::header::RETRY_AFTER,
+                            retry_after_secs.to_string(),
+                        )],
                         Json(json!({ "error": "Too Many Requests: Rate limit exceeded" })),
-                    ).into_response();
+                    )
+                        .into_response();
                 }
             }
             audit_auth_failure(&state, token_opt.as_deref(), peer);
@@ -385,7 +405,8 @@ pub async fn auth_layer(
     };
 
     // Handler-level RBAC gate (A7 / G1-3)
-    if let Some(min_role) = crate::config::handler_min_role(req.uri().path(), req.method().as_str()) {
+    if let Some(min_role) = crate::config::handler_min_role(req.uri().path(), req.method().as_str())
+    {
         if role < min_role {
             return (
                 StatusCode::FORBIDDEN,
@@ -438,7 +459,9 @@ pub async fn auth_layer(
     if is_query {
         response.headers_mut().insert(
             axum::http::header::WARNING,
-            axum::http::HeaderValue::from_static("199 - \"API key in query parameters is deprecated and insecure\""),
+            axum::http::HeaderValue::from_static(
+                "199 - \"API key in query parameters is deprecated and insecure\"",
+            ),
         );
     }
 
@@ -447,7 +470,10 @@ pub async fn auth_layer(
         headers.insert(axum::http::HeaderName::from_static("x-ratelimit-limit"), v);
     }
     if let Ok(v) = quota.remaining.to_string().parse() {
-        headers.insert(axum::http::HeaderName::from_static("x-ratelimit-remaining"), v);
+        headers.insert(
+            axum::http::HeaderName::from_static("x-ratelimit-remaining"),
+            v,
+        );
     }
     if let Ok(v) = quota.reset_secs.to_string().parse() {
         headers.insert(axum::http::HeaderName::from_static("x-ratelimit-reset"), v);
@@ -458,11 +484,7 @@ pub async fn auth_layer(
 
 /// Records an AUTH_FAILED audit event. The token is always redacted to a
 /// three-character prefix; the plaintext never reaches the audit trail.
-fn audit_auth_failure(
-    state: &McpHttpState,
-    token: Option<&str>,
-    peer: Option<SocketAddr>,
-) {
+fn audit_auth_failure(state: &McpHttpState, token: Option<&str>, peer: Option<SocketAddr>) {
     let Some(logger) = &state.audit_logger else {
         return;
     };
@@ -638,10 +660,11 @@ impl Stream for SseStream {
 }
 
 /// SSE connection handler (`GET /sse`)
-async fn sse_handler() -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, &'static str)> {
+async fn sse_handler(
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, &'static str)> {
     let (tx, rx) = mpsc::channel::<Event>(32);
 
-    let endpoint_uri = format!("/messages");
+    let endpoint_uri = "/messages".to_string();
     let initial_event = Event::default().event("endpoint").data(endpoint_uri);
     let _ = tx.send(initial_event).await;
 
@@ -1062,13 +1085,9 @@ When operating on at-pc agent terminals, follow this 3-tier hierarchy:\n\n\
                                     .get("total_marks")
                                     .and_then(|v| v.as_u64())
                                     .unwrap_or(marks_array.len() as u64);
-                                let source = val
-                                    .get("source")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("auto");
-                                let scale_factor = val
-                                    .get("scale_factor")
-                                    .and_then(|v| v.as_f64());
+                                let source =
+                                    val.get("source").and_then(|v| v.as_str()).unwrap_or("auto");
+                                let scale_factor = val.get("scale_factor").and_then(|v| v.as_f64());
                                 let scale_str = if let Some(sf) = scale_factor {
                                     format!(", scale_factor: {:.1}", sf)
                                 } else {
@@ -1081,10 +1100,16 @@ When operating on at-pc agent terminals, follow this 3-tier hierarchy:\n\n\
                                 );
                                 for m in marks_array {
                                     let id = m.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let label = m.get("label").and_then(|v| v.as_str()).unwrap_or("");
-                                    let ctype = m.get("control_type").and_then(|v| v.as_str()).unwrap_or("Control");
-                                    let rect = m.get("rect").map(|r| r.to_string()).unwrap_or_default();
-                                    let center = m.get("center").map(|c| c.to_string()).unwrap_or_default();
+                                    let label =
+                                        m.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                                    let ctype = m
+                                        .get("control_type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("Control");
+                                    let rect =
+                                        m.get("rect").map(|r| r.to_string()).unwrap_or_default();
+                                    let center =
+                                        m.get("center").map(|c| c.to_string()).unwrap_or_default();
                                     mark_text.push_str(&format!(
                                         "- mark_id: {}, type: {}, label: {:?}, center: {}, rect: {}\n",
                                         id, ctype, label, center, rect

@@ -242,7 +242,12 @@ pub fn encode_jpeg(rgb: &RgbImage, quality: u8) -> image::ImageResult<Vec<u8>> {
 }
 
 /// Encodes raw RGB bytes (width * height * 3) directly to JPEG.
-pub fn encode_jpeg_from_raw(rgb_bytes: &[u8], width: u32, height: u32, quality: u8) -> image::ImageResult<Vec<u8>> {
+pub fn encode_jpeg_from_raw(
+    rgb_bytes: &[u8],
+    width: u32,
+    height: u32,
+    quality: u8,
+) -> image::ImageResult<Vec<u8>> {
     let mut jpeg_bytes = Vec::with_capacity((width * height / 5) as usize);
     let mut cursor = Cursor::new(&mut jpeg_bytes);
     let mut encoder = JpegEncoder::new_with_quality(&mut cursor, quality);

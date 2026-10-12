@@ -834,25 +834,31 @@ pub fn generate_marked_screen_from_image_ext(
         if let Some(target_title) = window_title {
             let lower = target_title.to_lowercase();
             if let Ok(windows) = crate::tools::window::list_windows(false) {
-                windows.into_iter().find(|w| {
-                    w.title.to_lowercase().contains(&lower)
-                        || w.process_name.to_lowercase().contains(&lower)
-                }).and_then(|w| {
-                    let [wx, wy, ww, wh] = w.rect;
-                    if ww > 0 && wh > 0 {
-                        let rel_x = (wx - mon_off[0]).max(0) as u32;
-                        let rel_y = (wy - mon_off[1]).max(0) as u32;
-                        let clamp_w = (ww as u32).min(orig_width.saturating_sub(rel_x));
-                        let clamp_h = (wh as u32).min(orig_height.saturating_sub(rel_y));
-                        if clamp_w > 0 && clamp_h > 0 && (clamp_w < orig_width || clamp_h < orig_height) {
-                            Some([rel_x, rel_y, clamp_w, clamp_h])
+                windows
+                    .into_iter()
+                    .find(|w| {
+                        w.title.to_lowercase().contains(&lower)
+                            || w.process_name.to_lowercase().contains(&lower)
+                    })
+                    .and_then(|w| {
+                        let [wx, wy, ww, wh] = w.rect;
+                        if ww > 0 && wh > 0 {
+                            let rel_x = (wx - mon_off[0]).max(0) as u32;
+                            let rel_y = (wy - mon_off[1]).max(0) as u32;
+                            let clamp_w = (ww as u32).min(orig_width.saturating_sub(rel_x));
+                            let clamp_h = (wh as u32).min(orig_height.saturating_sub(rel_y));
+                            if clamp_w > 0
+                                && clamp_h > 0
+                                && (clamp_w < orig_width || clamp_h < orig_height)
+                            {
+                                Some([rel_x, rel_y, clamp_w, clamp_h])
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
-                    } else {
-                        None
-                    }
-                })
+                    })
             } else {
                 None
             }

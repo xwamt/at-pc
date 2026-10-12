@@ -172,25 +172,22 @@ impl eframe::App for AgentApp {
         }
 
         while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
-            match event {
-                tray_icon::TrayIconEvent::Click {
-                    button: tray_icon::MouseButton::Left,
-                    button_state: tray_icon::MouseButtonState::Up,
-                    ..
-                } => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                }
-                _ => {}
+            if let tray_icon::TrayIconEvent::Click {
+                button: tray_icon::MouseButton::Left,
+                button_state: tray_icon::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
         }
 
         // Close-to-tray intercept
-        if ctx.input(|i| i.viewport().close_requested()) {
-            if self.tray.is_some() && !self.should_quit {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            }
+        if ctx.input(|i| i.viewport().close_requested()) && self.tray.is_some() && !self.should_quit
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
 
         // Update tray status text

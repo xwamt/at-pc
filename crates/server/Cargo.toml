@@ -1,6 +1,6 @@
 [package]
 name = "at-pc-server"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
@@ -36,6 +36,7 @@ rustls-pki-types = { workspace = true }
 axum-server = { workspace = true }
 same-file = { workspace = true }
 getrandom = { workspace = true }
+ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
 subtle = { workspace = true }
 tray-icon = { workspace = true, optional = true }

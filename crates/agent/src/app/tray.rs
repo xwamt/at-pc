@@ -110,9 +110,8 @@ impl AgentTray {
 
     /// Updates the dynamic status labels in the tray menu.
     pub fn update_status(&self, status: &ClientConnectionStatus) {
-        let _ = self.status_item.set_text(format_status_menu_text(status));
-        let _ = self
-            .toggle_conn_item
+        self.status_item.set_text(format_status_menu_text(status));
+        self.toggle_conn_item
             .set_text(format_toggle_conn_text(status));
     }
 }

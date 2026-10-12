@@ -62,7 +62,7 @@
 
 ### TC-KEY-01: 密钥生命周期
 * **签发操作**: `POST /api/keys` (`name: test-op-key`, `role: operator`)
-  * 生成 Plaintext: `atpc_sk_vd23g000_SKkQ49edwQVFSyb0raOwyO6ymy4sl1Si4kWQ9K3POm0` (ID: `vd23g000`)
+  * 生成 Plaintext: `<redacted-test-key>` (ID: `vd23g000`；测试结束后已吊销)
 * **轮换操作**: `POST /api/keys/vd23g000/rotate` (`grace_hours: 1`)
   * 生成新 Key: `atpc_sk_y38rg000_...` (ID: `y38rg000`)
 * **注销操作**: `DELETE /api/keys/vd23g000` 与 `DELETE /api/keys/y38rg000`

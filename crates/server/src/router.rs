@@ -56,6 +56,10 @@ struct PendingCallEntry {
     tx: oneshot::Sender<Result<Value, String>>,
 }
 
+/// Subscribers that receive binary desktop frames for each terminal.
+type DesktopFrameSubscribers =
+    Arc<std::sync::RwLock<HashMap<String, tokio::sync::broadcast::Sender<Arc<Vec<u8>>>>>>;
+
 /// MCP Tool Router that handles terminal selection, tool dispatch, and response correlation
 pub struct McpRouter {
     registry: Arc<TerminalRegistry>,
@@ -63,7 +67,8 @@ pub struct McpRouter {
     active_terminal_id: Arc<RwLock<Option<String>>>,
     session_active_terminals: Arc<RwLock<HashMap<String, String>>>,
     desktop_frames: Arc<std::sync::RwLock<HashMap<String, DesktopFrameCache>>>,
-    desktop_frame_senders: Arc<std::sync::RwLock<HashMap<String, tokio::sync::broadcast::Sender<Arc<Vec<u8>>>>>>,
+    desktop_frame_senders: DesktopFrameSubscribers,
+    enrollment_store: Arc<crate::enrollment_store::DeviceEnrollmentStore>,
     audit_logger: Option<Arc<crate::audit::AuditLogger>>,
 }
 
@@ -77,8 +82,24 @@ impl McpRouter {
             session_active_terminals: Arc::new(RwLock::new(HashMap::new())),
             desktop_frames: Arc::new(std::sync::RwLock::new(HashMap::new())),
             desktop_frame_senders: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            enrollment_store: Arc::new(crate::enrollment_store::DeviceEnrollmentStore::in_memory()),
             audit_logger: None,
         }
+    }
+
+    /// Attaches a Pending-only enrollment store. The store remains independent
+    /// from the active TerminalRegistry and never exposes a control sender.
+    pub fn with_enrollment_store(
+        mut self,
+        enrollment_store: Arc<crate::enrollment_store::DeviceEnrollmentStore>,
+    ) -> Self {
+        self.enrollment_store = enrollment_store;
+        self
+    }
+
+    /// Accesses Pending enrollment records without granting terminal control.
+    pub fn enrollment_store(&self) -> &Arc<crate::enrollment_store::DeviceEnrollmentStore> {
+        &self.enrollment_store
     }
 
     /// Attaches an AuditLogger to record all tool invocations and authorization decisions
@@ -755,7 +776,12 @@ impl McpRouter {
 
     /// Retrieve the most recently cached desktop frame for a terminal
     pub async fn get_latest_desktop_frame(&self, terminal_id: &str) -> Option<DesktopFrameCache> {
-        let mut frame = self.desktop_frames.read().unwrap().get(terminal_id).cloned()?;
+        let mut frame = self
+            .desktop_frames
+            .read()
+            .unwrap()
+            .get(terminal_id)
+            .cloned()?;
         if frame.data.is_empty() && !frame.raw_bytes.is_empty() {
             frame.data = base64::prelude::BASE64_STANDARD.encode(&frame.raw_bytes);
         }

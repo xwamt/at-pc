@@ -22,7 +22,10 @@ async fn test_window_tools_permission_toggle() {
 
     // list_windows is read-only inspection, so it should succeed even with computer_use = false
     let list_res = disabled.execute("list_windows", json!({})).await;
-    assert!(list_res.is_ok(), "list_windows must be allowed when computer_use is disabled");
+    assert!(
+        list_res.is_ok(),
+        "list_windows must be allowed when computer_use is disabled"
+    );
 
     let mutation_tools = [
         ("focus_window", json!({"title": "test"})),

@@ -87,6 +87,22 @@ fn default_ws_path() -> String {
     "/ws".to_string()
 }
 
+fn default_enrollment_path() -> String {
+    "/enroll".to_string()
+}
+
+fn default_pending_enrollment_ttl_secs() -> u64 {
+    24 * 60 * 60
+}
+
+fn default_enrollment_challenge_ttl_secs() -> u64 {
+    120
+}
+
+fn default_enrollment_max_pending() -> usize {
+    1_000
+}
+
 fn default_mcp_port() -> u16 {
     9800
 }
@@ -116,6 +132,21 @@ pub struct ServerConfig {
     /// Path for WebSocket endpoint (default: "/ws")
     #[serde(default = "default_ws_path")]
     pub ws_path: String,
+    /// Separate WebSocket endpoint that accepts Pending-only enrollment requests.
+    #[serde(default = "default_enrollment_path")]
+    pub enrollment_path: String,
+    /// Optional path for durable Pending enrollment records.
+    #[serde(default)]
+    pub enrollment_store_path: Option<PathBuf>,
+    /// Lifetime of an unapproved Pending enrollment record in seconds.
+    #[serde(default = "default_pending_enrollment_ttl_secs")]
+    pub pending_enrollment_ttl_secs: u64,
+    /// Lifetime of an enrollment challenge in seconds.
+    #[serde(default = "default_enrollment_challenge_ttl_secs")]
+    pub enrollment_challenge_ttl_secs: u64,
+    /// Maximum number of retained Pending enrollment records.
+    #[serde(default = "default_enrollment_max_pending")]
+    pub enrollment_max_pending: usize,
     /// Port for MCP HTTP/SSE server (default: 9800)
     #[serde(default = "default_mcp_port")]
     pub mcp_port: u16,
@@ -177,6 +208,11 @@ impl Default for ServerConfig {
             listen_host: "0.0.0.0".to_string(),
             ws_port: 9801,
             ws_path: "/ws".to_string(),
+            enrollment_path: "/enroll".to_string(),
+            enrollment_store_path: None,
+            pending_enrollment_ttl_secs: default_pending_enrollment_ttl_secs(),
+            enrollment_challenge_ttl_secs: default_enrollment_challenge_ttl_secs(),
+            enrollment_max_pending: default_enrollment_max_pending(),
             mcp_port: 9800,
             auth_token: None,
             allowed_origins: Vec::new(),
@@ -384,31 +420,50 @@ pub fn handler_min_role(path: &str, method: &str) -> Option<Role> {
     if trimmed_path == "/api/terminals" && method == "GET" {
         return Some(Role::Viewer);
     }
-    if method == "POST" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/meta") {
+    if method == "POST"
+        && trimmed_path.starts_with("/api/terminals/")
+        && trimmed_path.ends_with("/meta")
+    {
         return Some(Role::Operator);
     }
     if trimmed_path == "/api/calls" && method == "GET" {
         return Some(Role::Viewer);
     }
-    if method == "GET" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/calls") {
+    if method == "GET"
+        && trimmed_path.starts_with("/api/terminals/")
+        && trimmed_path.ends_with("/calls")
+    {
         return Some(Role::Viewer);
     }
-    if method == "POST" && trimmed_path.starts_with("/api/terminals/") && (trimmed_path.ends_with("/desktop/start") || trimmed_path.ends_with("/desktop/stream")) {
+    if method == "POST"
+        && trimmed_path.starts_with("/api/terminals/")
+        && (trimmed_path.ends_with("/desktop/start") || trimmed_path.ends_with("/desktop/stream"))
+    {
         return Some(Role::Operator);
     }
-    if method == "POST" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/stop") {
+    if method == "POST"
+        && trimmed_path.starts_with("/api/terminals/")
+        && trimmed_path.ends_with("/desktop/stop")
+    {
         return Some(Role::Operator);
     }
-    if method == "GET" && trimmed_path.starts_with("/api/terminals/") && (trimmed_path.ends_with("/desktop/frame") || trimmed_path.ends_with("/desktop/frame.jpg")) {
+    if method == "GET"
+        && trimmed_path.starts_with("/api/terminals/")
+        && (trimmed_path.ends_with("/desktop/frame")
+            || trimmed_path.ends_with("/desktop/frame.jpg"))
+    {
         return Some(Role::Viewer);
     }
-    if method == "GET" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/raw") {
+    if method == "GET"
+        && trimmed_path.starts_with("/api/terminals/")
+        && trimmed_path.ends_with("/desktop/raw")
+    {
         return Some(Role::Viewer);
     }
-    if method == "POST" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/input") {
-        return Some(Role::Admin);
-    }
-    if method == "POST" && trimmed_path.starts_with("/api/terminals/") && trimmed_path.ends_with("/desktop/ticket") {
+    if method == "POST"
+        && trimmed_path.starts_with("/api/terminals/")
+        && trimmed_path.ends_with("/desktop/ticket")
+    {
         return Some(Role::Viewer);
     }
     None
@@ -425,7 +480,10 @@ mod tests {
             mcp_portt = 19999
         "#;
         let result: Result<ServerConfig, _> = toml::from_str(toml_with_typo);
-        assert!(result.is_err(), "misspelled config keys must fail deserialization");
+        assert!(
+            result.is_err(),
+            "misspelled config keys must fail deserialization"
+        );
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("unknown field `mcp_portt`") || err_msg.contains("mcp_portt"),

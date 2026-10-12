@@ -188,16 +188,7 @@ impl std::error::Error for AuthError {}
 /// Encodes 5 bytes as 8 lowercase Crockford base32 characters.
 pub fn crockford_base32_id(bytes: &[u8; 5]) -> String {
     let mut buf = [0u8; KEY_ID_LEN];
-    let acc = u64::from_be_bytes([
-        0,
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        0,
-        0,
-    ]);
+    let acc = u64::from_be_bytes([0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], 0, 0]);
     for (i, slot) in buf.iter_mut().enumerate() {
         let shift = 35 - (i as u32) * 5;
         let index = ((acc >> shift) & 0x1f) as usize;
@@ -224,7 +215,9 @@ pub fn hex_encode(bytes: &[u8]) -> String {
 
 /// Parses credential string formatted as `atpc_<kind>_<id>_<secret>`.
 pub fn parse_credential(cred: &str) -> Result<(KeyKind, String, String), AuthError> {
-    let rest = cred.strip_prefix(KEY_PREFIX).ok_or(AuthError::InvalidFormat)?;
+    let rest = cred
+        .strip_prefix(KEY_PREFIX)
+        .ok_or(AuthError::InvalidFormat)?;
     let (kind_str, rest) = rest.split_once('_').ok_or(AuthError::InvalidFormat)?;
     let kind = match kind_str {
         "sk" => KeyKind::SecretKey,
@@ -238,7 +231,10 @@ pub fn parse_credential(cred: &str) -> Result<(KeyKind, String, String), AuthErr
     if !id.bytes().all(|b| CROCKFORD32.contains(&b)) {
         return Err(AuthError::InvalidFormat);
     }
-    if !secret.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+    if !secret
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
         return Err(AuthError::InvalidFormat);
     }
     Ok((kind, id.to_string(), secret.to_string()))
@@ -296,7 +292,11 @@ impl KeyStore {
             let bootstrap_file = data_dir.join(crate::bootstrap::BOOTSTRAP_KEY_FILE);
             if bootstrap_file.exists() {
                 if let Ok(content) = std::fs::read_to_string(&bootstrap_file) {
-                    if let Some(key_line) = content.lines().map(str::trim).find(|l| l.starts_with("atpc_sk_")) {
+                    if let Some(key_line) = content
+                        .lines()
+                        .map(str::trim)
+                        .find(|l| l.starts_with("atpc_sk_"))
+                    {
                         if let Ok((kind, id, secret)) = parse_credential(key_line) {
                             let mut salt_bytes = [0u8; 16];
                             getrandom::getrandom(&mut salt_bytes)
@@ -411,8 +411,7 @@ impl KeyStore {
         let mut id_bytes = [0u8; 5];
         let mut id;
         loop {
-            getrandom::getrandom(&mut id_bytes)
-                .map_err(|e| format!("CSPRNG error: {e}"))?;
+            getrandom::getrandom(&mut id_bytes).map_err(|e| format!("CSPRNG error: {e}"))?;
             id = crockford_base32_id(&id_bytes);
             if !records.contains_key(&id) {
                 break;
@@ -420,13 +419,11 @@ impl KeyStore {
         }
 
         let mut secret_bytes = [0u8; 32];
-        getrandom::getrandom(&mut secret_bytes)
-            .map_err(|e| format!("CSPRNG error: {e}"))?;
+        getrandom::getrandom(&mut secret_bytes).map_err(|e| format!("CSPRNG error: {e}"))?;
         let secret = base64url_secret(&secret_bytes);
 
         let mut salt_bytes = [0u8; 16];
-        getrandom::getrandom(&mut salt_bytes)
-            .map_err(|e| format!("CSPRNG error: {e}"))?;
+        getrandom::getrandom(&mut salt_bytes).map_err(|e| format!("CSPRNG error: {e}"))?;
         let salt = hex_encode(&salt_bytes);
 
         let hash = compute_hash(&salt, &secret);
@@ -463,7 +460,9 @@ impl KeyStore {
         let mut records = self.records.write().map_err(|e| e.to_string())?;
 
         let is_active_admin = {
-            let record = records.get(id).ok_or_else(|| format!("key '{}' not found", id))?;
+            let record = records
+                .get(id)
+                .ok_or_else(|| format!("key '{}' not found", id))?;
             record.kind == KeyKind::SecretKey
                 && record.role == Some(Role::Admin)
                 && record.revoked_at.is_none()
@@ -493,16 +492,22 @@ impl KeyStore {
     /// - Issues a new key with same name, kind, role, scopes, device_id.
     /// - If `grace_hours == Some(0)`: revokes old key immediately.
     /// - Otherwise sets old key's `expires_at = now + grace_hours` (defaulting to 24 hours).
-    pub fn rotate(&self, id: &str, grace_hours: Option<u64>) -> Result<(KeyRecord, String), String> {
+    pub fn rotate(
+        &self,
+        id: &str,
+        grace_hours: Option<u64>,
+    ) -> Result<(KeyRecord, String), String> {
         let mut records = self.records.write().map_err(|e| e.to_string())?;
-        let old_record = records.get(id).cloned().ok_or_else(|| format!("key '{}' not found", id))?;
+        let old_record = records
+            .get(id)
+            .cloned()
+            .ok_or_else(|| format!("key '{}' not found", id))?;
 
         // Generate new key
         let mut id_bytes = [0u8; 5];
         let mut new_id;
         loop {
-            getrandom::getrandom(&mut id_bytes)
-                .map_err(|e| format!("CSPRNG error: {e}"))?;
+            getrandom::getrandom(&mut id_bytes).map_err(|e| format!("CSPRNG error: {e}"))?;
             new_id = crockford_base32_id(&id_bytes);
             if !records.contains_key(&new_id) {
                 break;
@@ -510,13 +515,11 @@ impl KeyStore {
         }
 
         let mut secret_bytes = [0u8; 32];
-        getrandom::getrandom(&mut secret_bytes)
-            .map_err(|e| format!("CSPRNG error: {e}"))?;
+        getrandom::getrandom(&mut secret_bytes).map_err(|e| format!("CSPRNG error: {e}"))?;
         let secret = base64url_secret(&secret_bytes);
 
         let mut salt_bytes = [0u8; 16];
-        getrandom::getrandom(&mut salt_bytes)
-            .map_err(|e| format!("CSPRNG error: {e}"))?;
+        getrandom::getrandom(&mut salt_bytes).map_err(|e| format!("CSPRNG error: {e}"))?;
         let salt = hex_encode(&salt_bytes);
 
         let hash = compute_hash(&salt, &secret);
@@ -566,7 +569,9 @@ impl KeyStore {
         let mut records = self.records.write().map_err(|e| e.to_string())?;
 
         let is_active_admin = {
-            let record = records.get(id).ok_or_else(|| format!("key '{}' not found", id))?;
+            let record = records
+                .get(id)
+                .ok_or_else(|| format!("key '{}' not found", id))?;
             record.kind == KeyKind::SecretKey
                 && record.role == Some(Role::Admin)
                 && record.revoked_at.is_none()

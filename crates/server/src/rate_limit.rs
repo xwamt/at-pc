@@ -85,7 +85,9 @@ impl AuthRateLimiter {
 
         // Prune failures older than 10 minutes (600s)
         let ten_mins = Duration::from_secs(600);
-        entry.failures.retain(|&t| now.duration_since(t) <= ten_mins);
+        entry
+            .failures
+            .retain(|&t| now.duration_since(t) <= ten_mins);
 
         // 2. If failures >= 30 in 10 minutes: ban IP for 15 minutes (900s)
         if entry.failures.len() >= 30 {
@@ -216,12 +218,16 @@ impl KeyQuotaTracker {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        let entry = entries.entry(key_id.to_string()).or_insert_with(|| KeyQuotaEntry {
-            requests: Vec::new(),
-        });
+        let entry = entries
+            .entry(key_id.to_string())
+            .or_insert_with(|| KeyQuotaEntry {
+                requests: Vec::new(),
+            });
 
         // Prune requests older than rolling window
-        entry.requests.retain(|&t| now.duration_since(t) <= self.window);
+        entry
+            .requests
+            .retain(|&t| now.duration_since(t) <= self.window);
 
         let current_count = entry.requests.len() as u32;
         let oldest = entry.requests.first().copied().unwrap_or(now);

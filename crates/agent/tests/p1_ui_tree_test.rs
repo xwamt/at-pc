@@ -437,8 +437,15 @@ async fn test_get_ui_tree_with_pid_and_hwnd_targeting() {
         let rect = el["rect"].as_array().unwrap();
         let left = rect[0].as_i64().unwrap();
         let top = rect[1].as_i64().unwrap();
-        assert!(left > -10000, "Element rect left ({}) should not be sentinel offscreen coordinate", left);
-        assert!(top > -10000, "Element rect top ({}) should not be sentinel offscreen coordinate", top);
+        assert!(
+            left > -10000,
+            "Element rect left ({}) should not be sentinel offscreen coordinate",
+            left
+        );
+        assert!(
+            top > -10000,
+            "Element rect top ({}) should not be sentinel offscreen coordinate",
+            top
+        );
     }
 }
-

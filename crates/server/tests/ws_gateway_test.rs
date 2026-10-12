@@ -1,5 +1,6 @@
 use at_pc_protocol::messages::{AgentToServerMessage, BinaryDesktopFrame, ServerToAgentMessage};
 use at_pc_protocol::models::{HeartbeatMetrics, TerminalInfo, TerminalStatus};
+use at_pc_server::audit::{AuditLogger, ACTION_WS_UNAUTHENTICATED_REGISTRATION_BASELINE};
 use at_pc_server::config::ServerConfig;
 use at_pc_server::router::McpRouter;
 use at_pc_server::ws::handler::{handle_stream, WsServerState};
@@ -127,8 +128,17 @@ async fn test_ws_gateway_handshake_and_registration() {
 }
 
 #[tokio::test]
-async fn test_ws_gateway_auth_token_optional() {
+async fn test_ws_gateway_unauthenticated_registration_is_audited_as_temporary_risk_baseline() {
     let registry = Arc::new(TerminalRegistry::new());
+    let audit_path = std::env::temp_dir().join(format!(
+        "at-pc-ws-registration-baseline-{}-{}.jsonl",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos()
+    ));
+    let audit_logger = Arc::new(AuditLogger::new(Some(audit_path.clone())));
     let state = WsServerState::new(
         registry,
         ServerConfig {
@@ -136,7 +146,8 @@ async fn test_ws_gateway_auth_token_optional() {
             auth_token: Some("correct_secret".to_string()),
             ..Default::default()
         },
-    );
+    )
+    .with_audit_logger(audit_logger.clone());
     let mut client_ws = connect_client(state).await;
 
     send_json(
@@ -151,11 +162,32 @@ async fn test_ws_gateway_auth_token_optional() {
         ServerToAgentMessage::RegisterAck {
             success, message, ..
         } => {
-            assert!(success, "Agent registration must succeed without enforcing tokens");
+            // This documents the M0 legacy risk baseline only. M2 must replace
+            // it with a rejection of unauthenticated enrollment attempts.
+            assert!(
+                success,
+                "legacy risk baseline currently accepts registration"
+            );
             assert!(message.is_none());
         }
-        other => panic!("Expected successful RegisterAck, got {other:?}"),
+        other => panic!("Expected current legacy RegisterAck, got {other:?}"),
     }
+
+    audit_logger
+        .flush()
+        .expect("flush registration baseline audit");
+    let audit = std::fs::read_to_string(&audit_path).expect("read registration audit");
+    assert!(audit.contains(ACTION_WS_UNAUTHENTICATED_REGISTRATION_BASELINE));
+    assert!(audit.contains("\"status\":\"WARN\""));
+    assert!(audit.contains("\"terminal_id\":\"agent-any-key\""));
+    assert!(audit.contains("\"token_prefix\":\"arb***\""));
+    assert!(audit.contains("\"credential_present\":true"));
+    assert!(!audit.contains("arbitrary_or_no_secret"));
+
+    audit_logger
+        .shutdown()
+        .expect("shutdown registration baseline audit");
+    let _ = std::fs::remove_file(audit_path);
 }
 
 #[tokio::test]

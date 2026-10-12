@@ -1,36 +1,34 @@
-# at-pc-agent 终端配置文件 (v1.0.0)
-# 请将此配置文件与 at-pc-agent (或 at-pc-agent.exe) 放置在同一目录下
+# at-pc-agent 终端配置文件 (v1.1.0)
+# 请将此配置文件与 at-pc-agent (或 at-pc-agent.exe) 放置在同一目录下。
+# 示例默认仅连接本机网关；局域网或远程部署请在 GUI 或此处显式指定受信任的 Server 地址。
+
+# 具身操作安全准入开关：默认 false，禁止远程鼠标键盘注入。
+# 可通过 --enable-computer-use 或 AT_PC_ENABLE_COMPUTER_USE=1 显式开启。
+enable_computer_use = false
 
 [server]
-# 中心服务端 WebSocket 连接地址
-# 本地测试请保持 127.0.0.1，局域网/远程测试请改为服务端的内网或公网 IP，如 ws://192.168.1.100:9801/ws
-# 若服务端开启了 TLS，请使用 wss:// 协议，如 wss://127.0.0.1:9801/ws
-url = "ws://192.168.66.224:9801/ws"
+# 中心服务端 WebSocket 连接地址。
+# 生产环境请使用受信任的 WSS 地址，例如 wss://<server-host>:9801/ws。
+url = "ws://127.0.0.1:9801/ws"
 
-# 设备认证 Token (推荐方式：由服务端签发并与 terminal_id 绑定的设备 Token，格式为 atpc_dv_<id>_<secret>)
-# 亦可通过启动参数 --device-token <TOKEN> 或环境变量 AT_PC_DEVICE_TOKEN 动态传入
-# device_token = "atpc_dv_01234567_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
+# [LEGACY] 设备/共享 Token 配置仅用于旧版本兼容，当前注册路径尚未在服务端强制校验。
+# 请勿把它当作设备身份或授权边界；后续 Pending Enrollment + mTLS 流程将替代它。
+# device_token = "atpc_dv_<id>_<secret>"
+# auth_token = "<legacy-shared-token>"
 
-# [DEPRECATED: 建议使用 device_token] 旧版共享鉴权 Token (若服务端配置了 --auth-token 则需保持一致，默认留空；已弃用，新部署请迁移至 device_token)
-# auth_token = "your-secret-token"
-
-# 断线自动重连间隔 (秒)
+# 固定自动重连间隔（秒）；修改服务器地址或用户手动重连可立即唤醒一次尝试。
 reconnect_interval_secs = 5
 
-# TLS / WSS 安全连接配置 (可选)
-# insecure_skip_verify = false   # 若使用自签名证书测试，可设为 true 跳过证书校验
-# ca_cert_path = "server.crt"    # 自定义 CA 证书路径 (PEM 格式)
-# client_cert_path = "client.crt"# 双向认证 mTLS 客户端证书路径 (PEM 格式)
-# client_key_path = "client.key" # 双向认证 mTLS 客户端私钥路径 (PEM 格式)
+# TLS / WSS 安全连接配置（可选）
+# insecure_skip_verify = false  # 仅隔离测试可设 true 跳过证书校验
+# ca_cert_path = "server.crt"   # 自定义 CA 证书路径（PEM）
+# client_cert_path = "client.crt" # mTLS 客户端证书路径（PEM）
+# client_key_path = "client.key"  # mTLS 客户端私钥路径（PEM）
 
 [device]
-# 终端唯一标识：默认为 "auto" (自动组合计算机名 + MAC 地址后缀保证唯一性)
-# 也可以手动指定固定标识，如 "finance-pc-01", "dev-pc-02"
+# 终端唯一标识：默认为 "auto"（自动组合计算机名和 MAC 地址后缀）。
+# 也可手动指定固定标识，例如 "finance-pc-01"。
 device_id = "auto"
 
-# 终端友好显示名称 (留空则自动读取计算机名)
+# 终端友好显示名称（留空时自动读取计算机名）。
 device_name = ""
-
-# 具身操作安全准入开关 (默认 false 禁用模拟鼠标键盘输入，设为 true 开启)
-# 亦可通过启动参数 --enable-computer-use 或环境变量 AT_PC_ENABLE_COMPUTER_USE=1 动态开启
-enable_computer_use = false

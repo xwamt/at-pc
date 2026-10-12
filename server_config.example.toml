@@ -1,48 +1,40 @@
-# at-pc-server 服务端配置文件示例 (v1.0.0)
-# 启动时可通过 --config server_config.toml 加载
+# at-pc-server 服务端配置文件示例 (v1.1.0)
+# 启动时可通过 --config server_config.toml 加载。
+# 此文件采用安全默认值：仅监听回环地址且不允许明文远程传输。
 
-# 监听 IP 地址：默认为 "0.0.0.0" (允许局域网与远程访问)，如需仅本地回环请设为 "127.0.0.1"
-listen_host = "0.0.0.0"
+# 仅本地访问；要对外提供服务，请显式改为受控监听地址并配置 TLS。
+listen_host = "127.0.0.1"
 
-# 非回环监听 (如 0.0.0.0) 且未配置 TLS 证书时，必须显式允许明文传输（生产环境建议配置下方 TLS 证书）
-allow_plaintext = true
+# 非回环监听且未配置 TLS 时保持 false；仅隔离测试可显式改为 true。
+allow_plaintext = false
 
-# WebSocket 终端通信端口与路径
+# WebSocket 终端通信端口与路径。
 ws_port = 9801
 ws_path = "/ws"
 
-# MCP HTTP/SSE 网关及 Web 管理控制台监听端口
+# MCP HTTP/SSE 网关及 Web 管理控制台监听端口。
 mcp_port = 9800
 
-# 全局默认连接鉴权 Token (留空则不开启默认 Token 验证)
-# [legacy] 明文 auth_token 已弃用：新版密钥由 server 首启自动生成 / 控制台管理。
-#          此处仅为兼容旧配置保留，优先级低于首启生成的 API Key 门禁凭据。
-# auth_token = "admin-secret-token"
+# [LEGACY] 明文 auth_token 已弃用；应使用首次启动生成的操作端 API Key。
+# auth_token = "<legacy-shared-token>"
 
-# CORS 跨域允许来源白名单 (为空时仅允许基础同源与内置 Dashboard)
-# allowed_origins = ["http://localhost:3000", "https://ops.example.com"]
+# CORS 跨域允许来源白名单（为空时仅允许基础同源与内置 Dashboard）。
+# allowed_origins = ["https://ops.example.com"]
 
-# 心跳与离线超时配置 (秒)
+# 心跳与离线超时配置（秒）。
 heartbeat_interval_secs = 5
 offline_threshold_secs = 15
 sweep_interval_secs = 5
 
-# 终端元数据本地持久化文件路径 (保存自定义设备名称、备注与标签)
+# 终端元数据与服务端追加审计 JSONL 的本地存储路径。
 meta_store_path = "terminals_meta.json"
-
-# 操作审计日志落盘路径 (不可篡改 JSONL 格式流水)
 audit_log_path = "audit.jsonl"
 
-# [legacy] 基于角色的访问控制 (RBAC) 明文 Token 映射（已弃用）
-# 注意：KeyStore 激活后，配置文件中包含明文 [roles] 将被拒绝启动。
-# 请使用 --migrate-legacy-credentials 命令迁移至 KeyStore 管理。
-# 支持三种角色级别：viewer (只读诊断), operator (运维排障), admin (完全控制/命令执行/具身操作)
+# [LEGACY] 基于角色的明文 Token 映射已弃用；KeyStore 激活后会拒绝此配置。
 # [roles]
-# "viewer-token-123" = "viewer"
-# "operator-token-456" = "operator"
-# "admin-token-789" = "admin"
+# "viewer-token" = "viewer"
 
-# TLS / HTTPS / WSS 传输层加密配置 (可选)
+# TLS / HTTPS / WSS 传输层加密配置：对外部署必须配置证书。
 # tls_cert_path = "server.crt"
 # tls_key_path = "server.key"
-# tls_client_ca_path = "ca.crt" # 开启客户端双向认证 (mTLS) 时配置
+# tls_client_ca_path = "ca.crt" # 现有 mTLS 客户端证书校验

@@ -457,22 +457,23 @@ mod win_uia {
                 }
                 let mut state = PidSearchState {
                     target_pid,
-                    target_title: window_title.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()),
+                    target_title: window_title
+                        .map(|s| s.trim().to_lowercase())
+                        .filter(|s| !s.is_empty()),
                     fg_hwnd: GetForegroundWindow(),
                     found_hwnd: None,
                     found_title: String::new(),
                     found_rect: [0, 0, 0, 0],
                 };
-                let _ = EnumWindows(
-                    Some(enum_pid_proc),
-                    LPARAM(&mut state as *mut _ as isize),
-                );
+                let _ = EnumWindows(Some(enum_pid_proc), LPARAM(&mut state as *mut _ as isize));
                 if let Some(hwnd) = state.found_hwnd {
                     (hwnd, state.found_title, state.found_rect)
                 } else {
                     return Err(format!("No window matching pid {} was found", target_pid));
                 }
-            } else if let Some(title_filter) = window_title.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            } else if let Some(title_filter) =
+                window_title.map(|s| s.trim()).filter(|s| !s.is_empty())
+            {
                 let trimmed = title_filter.to_lowercase();
                 let mut state = WindowSearchState {
                     target_title: trimmed,
@@ -829,7 +830,9 @@ mod non_windows_fallback {
         } else if let Some(p) = pid {
             let mut sys = sysinfo::System::new();
             sys.refresh_processes();
-            let title_filter = window_title.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+            let title_filter = window_title
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty());
             let found = windows.into_iter().find(|w| {
                 if w.is_minimized().unwrap_or(false) {
                     return false;
@@ -1077,7 +1080,14 @@ pub fn get_ui_tree_targeted(
 
     #[cfg(not(windows))]
     {
-        non_windows_fallback::collect_fallback_ui_tree(depth, window_title, query, compact, pid, hwnd)
+        non_windows_fallback::collect_fallback_ui_tree(
+            depth,
+            window_title,
+            query,
+            compact,
+            pid,
+            hwnd,
+        )
     }
 }
 

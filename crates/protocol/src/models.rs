@@ -11,6 +11,44 @@ pub struct TerminalInfo {
     pub agent_version: String,
 }
 
+/// A minimized device description submitted during unauthenticated enrollment.
+/// It intentionally excludes usernames, tokens, full public keys, signatures,
+/// and any data that could grant access to the pending device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrollmentDeviceFacts {
+    pub hostname: String,
+    pub os_version: String,
+    pub agent_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lan_ip: Option<String>,
+}
+
+/// Lifecycle values for an enrolled device. M1 only creates `Pending` records;
+/// later values are reserved for the approval and certificate lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EnrollmentStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Revoked,
+}
+
+/// A public, read-only projection of a pending enrollment for authorized
+/// operators. It never includes cryptographic material or control channels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingEnrollmentSummary {
+    pub enrollment_id: String,
+    pub stable_device_id: String,
+    pub device_fingerprint: String,
+    pub facts: EnrollmentDeviceFacts,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+    pub status: EnrollmentStatus,
+    pub requested_at: i64,
+    pub last_seen_at: i64,
+    pub expires_at: i64,
+}
+
 /// Heartbeat metrics reported periodically by agent
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeartbeatMetrics {

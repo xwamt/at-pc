@@ -1,5 +1,90 @@
-use crate::models::{HeartbeatMetrics, TerminalInfo};
+use crate::models::{
+    EnrollmentDeviceFacts, EnrollmentStatus, HeartbeatMetrics, TerminalInfo,
+};
 use serde::{Deserialize, Serialize};
+
+/// First enrollment message sent by an Agent that has no legacy registration
+/// credential. The public key and nonce are proof inputs only; M1 does not use
+/// them to authorize control-plane access.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrollmentHello {
+    pub protocol_version: u16,
+    pub stable_device_id: String,
+    pub public_key: String,
+    pub facts: EnrollmentDeviceFacts,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+    pub client_nonce: String,
+}
+
+/// Enrollment messages are kept separate from the active Agent WebSocket
+/// contract so Register/RegisterAck wire compatibility remains intact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum EnrollmentClientMessage {
+    Hello(EnrollmentHello),
+    Proof {
+        enrollment_id: String,
+        signature: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum EnrollmentServerMessage {
+    Challenge {
+        enrollment_id: String,
+        server_nonce: String,
+        expires_at: i64,
+    },
+    Status {
+        enrollment_id: String,
+        status: EnrollmentStatus,
+        approval_phrase: String,
+        retry_after_secs: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason_code: Option<String>,
+    },
+    Error {
+        code: String,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_secs: Option<u64>,
+    },
+}
+
+#[derive(Serialize)]
+struct EnrollmentProofTranscript<'a> {
+    protocol_version: u16,
+    enrollment_id: &'a str,
+    server_nonce: &'a str,
+    client_nonce: &'a str,
+    stable_device_id: &'a str,
+    public_key: &'a str,
+    facts: &'a EnrollmentDeviceFacts,
+    capabilities: &'a [String],
+}
+
+/// Produces the exact, versioned byte transcript signed by the device during
+/// enrollment. Struct serialization fixes field order and prevents accidental
+/// omission of security-relevant hello fields.
+pub fn enrollment_proof_transcript(
+    hello: &EnrollmentHello,
+    enrollment_id: &str,
+    server_nonce: &str,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&EnrollmentProofTranscript {
+        protocol_version: hello.protocol_version,
+        enrollment_id,
+        server_nonce,
+        client_nonce: &hello.client_nonce,
+        stable_device_id: &hello.stable_device_id,
+        public_key: &hello.public_key,
+        facts: &hello.facts,
+        capabilities: &hello.capabilities,
+    })
+    .map_err(|error| format!("failed to serialize enrollment proof transcript: {error}"))
+}
 
 /// Messages sent from Agent (Client) to Server
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

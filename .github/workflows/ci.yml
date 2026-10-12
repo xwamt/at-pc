@@ -79,6 +79,13 @@ jobs:
           python3 scripts/check_no_agent_server_dev_cycle.py
           python3 scripts/test_check_no_agent_server_dev_cycle.py
 
+      - name: Check route-security and documentation contracts
+        run: |
+          python3 scripts/check_route_security.py
+          python3 scripts/test_check_route_security.py
+          python3 scripts/check_documentation_contracts.py
+          python3 scripts/test_check_documentation_contracts.py
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:

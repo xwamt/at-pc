@@ -118,8 +118,8 @@ impl AgentConfig {
     pub fn resolve_token(&self) -> Option<String> {
         self.device_token
             .as_ref()
-            .or_else(|| self.server.device_token.as_ref())
-            .or_else(|| self.server.auth_token.as_ref())
+            .or(self.server.device_token.as_ref())
+            .or(self.server.auth_token.as_ref())
             .cloned()
     }
 
@@ -417,11 +417,16 @@ mod tests {
 
     #[test]
     fn test_device_token_precedence_over_legacy_auth_token() {
-        let mut config = AgentConfig::default();
+        let mut config = AgentConfig {
+            device_token: None,
+            server: ServerConfig {
+                device_token: None,
+                auth_token: None,
+                ..ServerConfig::default()
+            },
+            ..AgentConfig::default()
+        };
         // 1. Initially neither token is set (unless set in outer test env)
-        config.device_token = None;
-        config.server.device_token = None;
-        config.server.auth_token = None;
         assert_eq!(config.resolve_token(), None);
 
         // 2. Legacy auth_token only

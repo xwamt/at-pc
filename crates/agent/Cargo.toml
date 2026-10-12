@@ -1,6 +1,6 @@
 [package]
 name = "at-pc-agent"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
@@ -23,6 +23,8 @@ serde_json = { workspace = true }
 sysinfo = { workspace = true }
 local-ip-address = { workspace = true }
 base64 = { workspace = true }
+getrandom = { workspace = true }
+ed25519-dalek = { workspace = true }
 xcap = { workspace = true }
 image = { workspace = true }
 chrono = { workspace = true }

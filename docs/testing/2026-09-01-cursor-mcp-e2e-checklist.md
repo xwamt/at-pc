@@ -1,3 +1,5 @@
+> **历史归档：不适用于 v1.x 当前产品行为。** 本文记录 v0.2.0 的历史手工验证流程；其中 PIN、单体二进制和会话语义均不可作为当前版本的验收依据。
+
 # at-pc v0.2.0 E2E Validation Protocol & Checklist (Cursor / Claude Desktop)
 
 **Version:** `0.2.0`  

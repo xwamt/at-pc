@@ -48,16 +48,7 @@ impl BootstrapOutcome {
 /// Encodes 5 bytes as 8 lowercase Crockford base32 characters.
 fn crockford_base32_id(bytes: &[u8; 5]) -> String {
     let mut buf = [0u8; KEY_ID_LEN];
-    let acc = u64::from_be_bytes([
-        0,
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        0,
-        0,
-    ]);
+    let acc = u64::from_be_bytes([0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], 0, 0]);
     // 40 bits, take 5-bit groups from the most significant side.
     for (i, slot) in buf.iter_mut().enumerate() {
         let shift = 35 - (i as u32) * 5;
@@ -101,7 +92,9 @@ pub fn validate_api_key_format(key: &str) -> bool {
         return false;
     }
     id.bytes().all(|b| CROCKFORD32.contains(&b))
-        && secret.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && secret
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// Extracts the first `atpc_sk_...` line from free-form file content.
@@ -280,7 +273,10 @@ mod tests {
             let key = generate_api_key().expect("CSPRNG");
             assert!(validate_api_key_format(&key), "bad key: {key}");
             assert!(key.starts_with("atpc_sk_"));
-            assert_eq!(key.len(), KEY_PREFIX.len() + KEY_ID_LEN + 1 + KEY_SECRET_LEN);
+            assert_eq!(
+                key.len(),
+                KEY_PREFIX.len() + KEY_ID_LEN + 1 + KEY_SECRET_LEN
+            );
         }
     }
 
@@ -294,28 +290,45 @@ mod tests {
     #[test]
     fn format_validation_rejects_malformed_keys() {
         assert!(!validate_api_key_format("atpc_sk_short_secret"));
-        assert!(!validate_api_key_format("ATPC_SK_abcd2345_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+        assert!(!validate_api_key_format(
+            "ATPC_SK_abcd2345_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        ));
         assert!(!validate_api_key_format(
             "atpc_sk_abcd2345_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         )); // 44 chars
         assert!(!validate_api_key_format(
             "atpc_sk_abcd234l_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         )); // 'l' not in Crockford
-        assert!(!validate_api_key_format("atpc_sk_abcd2345_AAA AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+        assert!(!validate_api_key_format(
+            "atpc_sk_abcd2345_AAA AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        ));
         assert!(!validate_api_key_format(""));
     }
 
     #[test]
     fn bootstrap_is_idempotent_across_restarts() {
-        let dir = std::env::temp_dir().join(format!("atpc-bootstrap-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let dir = std::env::temp_dir().join(format!(
+            "atpc-bootstrap-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let first = ensure_bootstrap_key(&dir).expect("bootstrap");
         let second = ensure_bootstrap_key(&dir).expect("bootstrap read-back");
-        assert_eq!(first.key(), second.key(), "restart must reuse the existing key");
+        assert_eq!(
+            first.key(),
+            second.key(),
+            "restart must reuse the existing key"
+        );
         match second {
             BootstrapOutcome::Existing(_) => {}
             BootstrapOutcome::Generated(_) => panic!("second call must not regenerate"),
-            BootstrapOutcome::Skipped => panic!("second call with existing bootstrap file must not be skipped"),
+            BootstrapOutcome::Skipped => {
+                panic!("second call with existing bootstrap file must not be skipped")
+            }
         }
         #[cfg(unix)]
         {

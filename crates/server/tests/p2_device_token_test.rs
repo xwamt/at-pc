@@ -44,10 +44,9 @@ async fn connect_ws_client(
     tokio::spawn(async move {
         handle_stream_with_peer(server_stream, state, peer_addr).await;
     });
-    let (client_ws, response) =
-        tokio_tungstenite::client_async("ws://127.0.0.1/ws", client_stream)
-            .await
-            .expect("Client handshake failed");
+    let (client_ws, response) = tokio_tungstenite::client_async("ws://127.0.0.1/ws", client_stream)
+        .await
+        .expect("Client handshake failed");
     assert_eq!(response.status(), 101);
     client_ws
 }
@@ -104,6 +103,10 @@ async fn assert_connection_closed(
 
 // =========================================================================
 // §3.4 G2 Scenarios 1 to 9
+//
+// M0 migration baseline: the WS tests below document the current unsafe
+// acceptance behavior only. M2 must replace every successful no/invalid-token
+// registration expectation with Pending Enrollment and mTLS rejection tests.
 // =========================================================================
 
 /// G2-1: 签发设备 Token (kind=dv, device_id="laptop-roeh3p85-b6a918")
@@ -130,10 +133,7 @@ fn test_g2_1_issue_device_token_format() {
         "Device token must start with atpc_dv_: {plaintext}"
     );
     assert_eq!(record.kind, KeyKind::DeviceToken);
-    assert_eq!(
-        record.device_id.as_deref(),
-        Some("laptop-roeh3p85-b6a918")
-    );
+    assert_eq!(record.device_id.as_deref(), Some("laptop-roeh3p85-b6a918"));
     assert_eq!(record.name, "laptop-01");
 
     let verified = keystore.verify(&plaintext).unwrap();
@@ -178,8 +178,13 @@ async fn test_g2_2_ws_register_without_token_succeeds() {
     send_register_msg(&mut client_ws, "laptop-01", None).await;
 
     match receive_register_ack(&mut client_ws).await {
-        ServerToAgentMessage::RegisterAck { success, message, .. } => {
-            assert!(success, "Registration without token must succeed (Agent requires no key)");
+        ServerToAgentMessage::RegisterAck {
+            success, message, ..
+        } => {
+            assert!(
+                success,
+                "Registration without token must succeed (Agent requires no key)"
+            );
             assert!(message.is_none());
         }
         other => panic!("Expected RegisterAck, got {other:?}"),
@@ -226,8 +231,13 @@ async fn test_g2_3_ws_register_with_any_token_succeeds() {
     .await;
 
     match receive_register_ack(&mut client_ws).await {
-        ServerToAgentMessage::RegisterAck { success, message, .. } => {
-            assert!(success, "Registration with token must succeed without blocking agent");
+        ServerToAgentMessage::RegisterAck {
+            success, message, ..
+        } => {
+            assert!(
+                success,
+                "Registration with token must succeed without blocking agent"
+            );
             assert!(message.is_none());
         }
         other => panic!("Expected RegisterAck, got {other:?}"),
@@ -266,16 +276,16 @@ async fn test_g2_4_ws_register_with_dv_token_and_matching_terminal_id_succeeds()
     .with_keystore(keystore);
 
     let mut client_ws = connect_ws_client(state, None).await;
-    send_register_msg(
-        &mut client_ws,
-        "laptop-roeh3p85-b6a918",
-        Some(dv_token),
-    )
-    .await;
+    send_register_msg(&mut client_ws, "laptop-roeh3p85-b6a918", Some(dv_token)).await;
 
     match receive_register_ack(&mut client_ws).await {
-        ServerToAgentMessage::RegisterAck { success, message, .. } => {
-            assert!(success, "Registration with matching terminal_id must succeed");
+        ServerToAgentMessage::RegisterAck {
+            success, message, ..
+        } => {
+            assert!(
+                success,
+                "Registration with matching terminal_id must succeed"
+            );
             assert!(message.is_none());
         }
         other => panic!("Expected RegisterAck, got {other:?}"),
@@ -318,15 +328,12 @@ async fn test_g2_5_ws_register_with_dv_token_and_terminal_id_succeeds() {
     .with_keystore(keystore);
 
     let mut client_ws = connect_ws_client(state, None).await;
-    send_register_msg(
-        &mut client_ws,
-        "custom-machine-id",
-        Some(dv_token),
-    )
-    .await;
+    send_register_msg(&mut client_ws, "custom-machine-id", Some(dv_token)).await;
 
     match receive_register_ack(&mut client_ws).await {
-        ServerToAgentMessage::RegisterAck { success, message, .. } => {
+        ServerToAgentMessage::RegisterAck {
+            success, message, ..
+        } => {
             assert!(success, "Agent registration must succeed");
             assert!(message.is_none());
         }
@@ -415,7 +422,9 @@ async fn test_g2_7_sk_key_in_agent_config_succeeds() {
     send_register_msg(&mut client_ws, "laptop-01", Some(sk_key)).await;
 
     match receive_register_ack(&mut client_ws).await {
-        ServerToAgentMessage::RegisterAck { success, message, .. } => {
+        ServerToAgentMessage::RegisterAck {
+            success, message, ..
+        } => {
             assert!(success, "Agent presenting sk token must succeed");
             assert!(message.is_none());
         }
@@ -465,7 +474,9 @@ async fn test_g2_8_legacy_auth_token_compat_path() {
     .await;
 
     match receive_register_ack(&mut client_ws).await {
-        ServerToAgentMessage::RegisterAck { success, message, .. } => {
+        ServerToAgentMessage::RegisterAck {
+            success, message, ..
+        } => {
             assert!(
                 success,
                 "Legacy auth_token fallback must succeed for backwards compatibility"
@@ -501,15 +512,12 @@ async fn test_g2_9_registration_failure_rate_limiting() {
     .with_rate_limiter(rate_limiter);
 
     let mut client_ws = connect_ws_client(state.clone(), Some(peer_addr)).await;
-    send_register_msg(
-        &mut client_ws,
-        "attacker-host",
-        None,
-    )
-    .await;
+    send_register_msg(&mut client_ws, "attacker-host", None).await;
 
     match receive_register_ack(&mut client_ws).await {
-        ServerToAgentMessage::RegisterAck { success, message, .. } => {
+        ServerToAgentMessage::RegisterAck {
+            success, message, ..
+        } => {
             assert!(!success, "Attempt must be rate limited");
             assert_eq!(
                 message.as_deref(),
@@ -558,8 +566,8 @@ async fn test_p0_23_shared_keystore_dynamic_issue_and_revoke_propagates_to_ws_wi
     );
 
     // Instantiate WS state with the EXACT same shared keystore
-    let ws_state = WsServerState::new(registry.clone(), config.clone())
-        .with_keystore(keystore.clone());
+    let ws_state =
+        WsServerState::new(registry.clone(), config.clone()).with_keystore(keystore.clone());
 
     // 2. Issue a device token via HTTP POST /api/keys
     let issue_body = serde_json::json!({
@@ -578,19 +586,16 @@ async fn test_p0_23_shared_keystore_dynamic_issue_and_revoke_propagates_to_ws_wi
 
     let resp = http_router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let issue_resp: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let issued_key_id = issue_resp["key"]["id"].as_str().unwrap().to_string();
     let issued_raw_key = issue_resp["plaintext"].as_str().unwrap().to_string();
 
     // 3. WITHOUT RESTARTING THE SERVER: Verify WS accepts registration
     let mut client_ws = connect_ws_client(ws_state.clone(), None).await;
-    send_register_msg(
-        &mut client_ws,
-        "PC-DYNAMIC-1",
-        Some(issued_raw_key.clone()),
-    )
-    .await;
+    send_register_msg(&mut client_ws, "PC-DYNAMIC-1", Some(issued_raw_key.clone())).await;
 
     match receive_register_ack(&mut client_ws).await {
         ServerToAgentMessage::RegisterAck { success, .. } => {
@@ -601,7 +606,7 @@ async fn test_p0_23_shared_keystore_dynamic_issue_and_revoke_propagates_to_ws_wi
 
     // 4. Revoke the token via HTTP DELETE /api/keys/:id
     let req = Request::builder()
-        .uri(&format!("/api/keys/{issued_key_id}"))
+        .uri(format!("/api/keys/{issued_key_id}"))
         .method("DELETE")
         .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
         .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))))

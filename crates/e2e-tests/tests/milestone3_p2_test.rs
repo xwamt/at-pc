@@ -607,6 +607,10 @@ async fn test_p2_4_dashboard_rbac_and_audit_api() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // 6. Verify dashboard operations generated audit records
+    audit_logger
+        .flush_async()
+        .await
+        .expect("flush dashboard audit records");
     let logs = audit_logger.read_recent(10);
     assert!(
         !logs.is_empty(),

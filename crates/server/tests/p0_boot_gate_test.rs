@@ -84,7 +84,8 @@ fn test_boot_gate_allows_non_loopback_insecure_mode_with_allow_plaintext() {
 #[test]
 fn test_legacy_config_gate_rejects_plaintext_roles_when_keystore_active() {
     let mut cfg = ServerConfig::default();
-    cfg.roles.insert("secret".to_string(), at_pc_server::Role::Admin);
+    cfg.roles
+        .insert("secret".to_string(), at_pc_server::Role::Admin);
 
     assert_eq!(
         at_pc_server::config::validate_legacy_config_gate(&cfg, true),

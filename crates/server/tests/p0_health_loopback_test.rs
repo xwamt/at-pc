@@ -109,7 +109,8 @@ async fn test_non_loopback_health_without_credentials_returns_401() {
         .method("GET")
         .body(Body::empty())
         .unwrap();
-    req.extensions_mut().insert(ConnectInfo(non_loopback_addr()));
+    req.extensions_mut()
+        .insert(ConnectInfo(non_loopback_addr()));
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -124,7 +125,8 @@ async fn test_non_loopback_health_with_valid_bearer_token_returns_200() {
         .header(header::AUTHORIZATION, format!("Bearer {}", VALID_TOKEN))
         .body(Body::empty())
         .unwrap();
-    req.extensions_mut().insert(ConnectInfo(non_loopback_addr()));
+    req.extensions_mut()
+        .insert(ConnectInfo(non_loopback_addr()));
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -147,7 +149,8 @@ async fn test_non_loopback_api_terminals_without_credentials_returns_401() {
         .method("GET")
         .body(Body::empty())
         .unwrap();
-    req.extensions_mut().insert(ConnectInfo(non_loopback_addr()));
+    req.extensions_mut()
+        .insert(ConnectInfo(non_loopback_addr()));
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -161,7 +164,8 @@ async fn test_non_loopback_dashboard_root_without_credentials_returns_200() {
         .method("GET")
         .body(Body::empty())
         .unwrap();
-    req.extensions_mut().insert(ConnectInfo(non_loopback_addr()));
+    req.extensions_mut()
+        .insert(ConnectInfo(non_loopback_addr()));
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(

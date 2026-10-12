@@ -35,6 +35,17 @@ pub const ACTION_KEY_CREATE: &str = "key:create";
 pub const ACTION_KEY_REVOKE: &str = "key:revoke";
 /// Audit action: an API key was rotated.
 pub const ACTION_KEY_ROTATE: &str = "key:rotate";
+/// Audit action: the legacy WebSocket gateway accepted a registration without
+/// validating the supplied credential. This is a temporary M0 risk baseline
+/// and must be removed when M2 enrollment replaces the legacy path.
+pub const ACTION_WS_UNAUTHENTICATED_REGISTRATION_BASELINE: &str =
+    "ws:register_unauthenticated_baseline";
+/// Audit action: a device identity created a Pending-only enrollment record.
+pub const ACTION_ENROLLMENT_REQUESTED: &str = "enrollment:requested";
+/// Audit action: an existing Pending-only enrollment record was refreshed.
+pub const ACTION_ENROLLMENT_REFRESHED: &str = "enrollment:refreshed";
+/// Audit action: an enrollment request was rejected due to identity conflict or capacity.
+pub const ACTION_ENROLLMENT_REJECTED: &str = "enrollment:rejected";
 
 type AuditResult = Result<(), String>;
 

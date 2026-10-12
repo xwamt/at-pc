@@ -74,7 +74,8 @@ pub mod windows {
                         self.bitmap = 0;
                     }
 
-                    let new_bitmap = CreateCompatibleBitmap(self.desktop_dc, target_w as i32, target_h as i32);
+                    let new_bitmap =
+                        CreateCompatibleBitmap(self.desktop_dc, target_w as i32, target_h as i32);
                     if new_bitmap == 0 {
                         return Err("Failed to create compatible bitmap".to_string());
                     }
@@ -122,10 +123,18 @@ pub mod windows {
                             && cy + 32 >= monitor_y
                             && cy <= monitor_y + monitor_h as i32
                         {
-                            let draw_x = (((cx - monitor_x) as f64 * target_w as f64) / monitor_w as f64).round() as i32;
-                            let draw_y = (((cy - monitor_y) as f64 * target_h as f64) / monitor_h as f64).round() as i32;
-                            let draw_w = ((32.0 * target_w as f64) / monitor_w as f64).round().max(16.0) as i32;
-                            let draw_h = ((32.0 * target_h as f64) / monitor_h as f64).round().max(16.0) as i32;
+                            let draw_x = (((cx - monitor_x) as f64 * target_w as f64)
+                                / monitor_w as f64)
+                                .round() as i32;
+                            let draw_y = (((cy - monitor_y) as f64 * target_h as f64)
+                                / monitor_h as f64)
+                                .round() as i32;
+                            let draw_w = ((32.0 * target_w as f64) / monitor_w as f64)
+                                .round()
+                                .max(16.0) as i32;
+                            let draw_h = ((32.0 * target_h as f64) / monitor_h as f64)
+                                .round()
+                                .max(16.0) as i32;
 
                             DrawIconEx(
                                 self.mem_dc,

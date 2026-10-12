@@ -143,7 +143,10 @@ async fn dashboard_html_handler() -> impl IntoResponse {
     let html = DASHBOARD_HTML.to_string();
     (
         [
-            (axum::http::header::CACHE_CONTROL, "no-cache, no-store, must-revalidate, max-age=0"),
+            (
+                axum::http::header::CACHE_CONTROL,
+                "no-cache, no-store, must-revalidate, max-age=0",
+            ),
             (axum::http::header::PRAGMA, "no-cache"),
             (axum::http::header::EXPIRES, "0"),
         ],
@@ -969,7 +972,9 @@ async fn api_desktop_ws_handler(
     };
 
     let query_params = query.clone();
-    ws.on_upgrade(move |socket| handle_desktop_ws_session(socket, state, terminal_id, role, query_params))
+    ws.on_upgrade(move |socket| {
+        handle_desktop_ws_session(socket, state, terminal_id, role, query_params)
+    })
 }
 
 async fn handle_desktop_ws_session(
@@ -1047,7 +1052,9 @@ async fn handle_desktop_ws_session(
                             }
                         }
                         Err(err) => {
-                            tracing::warn!("Failed to parse desktop input JSON on [{term_id_recv}]: {err}");
+                            tracing::warn!(
+                                "Failed to parse desktop input JSON on [{term_id_recv}]: {err}"
+                            );
                         }
                     }
                 }
@@ -1298,10 +1305,7 @@ async fn api_auth_logout(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(cookie_header) = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-    {
+    if let Some(cookie_header) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
         for pair in cookie_header.split(';') {
             if let Some((k, v)) = pair.trim().split_once('=') {
                 if k.eq_ignore_ascii_case("atpc_session") {
@@ -1377,7 +1381,11 @@ async fn api_list_keys(
             Json(json!({ "error": "Forbidden: Admin role required" })),
         ));
     }
-    let keys = state.keystore.as_ref().map(|ks| ks.list()).unwrap_or_default();
+    let keys = state
+        .keystore
+        .as_ref()
+        .map(|ks| ks.list())
+        .unwrap_or_default();
     Ok(Json(keys))
 }
 
@@ -1412,12 +1420,21 @@ async fn api_create_key(
 
     let kind = payload.kind.unwrap_or(KeyKind::SecretKey);
     let key_role = payload.role.or(Some(Role::Viewer));
-    let scopes = payload.scopes.unwrap_or_else(|| vec!["console".to_string(), "mcp".to_string()]);
-    let expires_at = payload.expires_days.map(|days| {
-        (chrono::Utc::now() + chrono::Duration::days(days as i64)).to_rfc3339()
-    });
+    let scopes = payload
+        .scopes
+        .unwrap_or_else(|| vec!["console".to_string(), "mcp".to_string()]);
+    let expires_at = payload
+        .expires_days
+        .map(|days| (chrono::Utc::now() + chrono::Duration::days(days as i64)).to_rfc3339());
 
-    match ks.issue(payload.name, kind, key_role, scopes, payload.device_id, expires_at) {
+    match ks.issue(
+        payload.name,
+        kind,
+        key_role,
+        scopes,
+        payload.device_id,
+        expires_at,
+    ) {
         Ok((record, plaintext)) => {
             if let Some(ref logger) = state.audit_logger {
                 logger.log(crate::audit::AuditRecord {
@@ -1429,7 +1446,9 @@ async fn api_create_key(
                     terminal_id: None,
                     action: crate::audit::ACTION_KEY_CREATE.to_string(),
                     tool_name: None,
-                    arguments: Some(json!({ "key_id": record.id, "name": record.name, "kind": record.kind })),
+                    arguments: Some(
+                        json!({ "key_id": record.id, "name": record.name, "kind": record.kind }),
+                    ),
                     status: "OK".to_string(),
                     error: None,
                     duration_ms: Some(0),

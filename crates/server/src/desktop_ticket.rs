@@ -113,7 +113,10 @@ mod tests {
         assert_eq!(role, Role::Admin);
 
         // Single-use: consuming again must fail
-        assert_eq!(store.consume(&ticket, "term-123"), Err(TicketError::NotFound));
+        assert_eq!(
+            store.consume(&ticket, "term-123"),
+            Err(TicketError::NotFound)
+        );
     }
 
     #[test]
@@ -133,6 +136,9 @@ mod tests {
         let ticket = store.issue("term-123", Role::Admin);
         std::thread::sleep(Duration::from_millis(20));
 
-        assert_eq!(store.consume(&ticket, "term-123"), Err(TicketError::Expired));
+        assert_eq!(
+            store.consume(&ticket, "term-123"),
+            Err(TicketError::Expired)
+        );
     }
 }
